@@ -7,7 +7,7 @@ import requests
 import re
 import yfinance as yf
 import pytz
-from datetime import datetime, timedelta
+from datetime import datetime
 from scipy.stats import norm
 import streamlit.components.v1 as components
 
@@ -52,7 +52,7 @@ st.markdown("""
     .dot-teal { height: 8px; width: 8px; background-color: #14b8a6; border-radius: 50%; }
     
     /* Виджеты снизу */
-    .widget-container { background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 15px; height: 350px; display: flex; flex-direction: column; box-shadow: 0 4px 10px rgba(0,0,0,0.4); }
+    .widget-container { background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 15px; height: 320px; display: flex; flex-direction: column; box-shadow: 0 4px 10px rgba(0,0,0,0.4); }
     .widget-header { color: #f8fafc; font-size: 13px; font-weight: 800; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; text-transform: uppercase; border-bottom: 1px solid #1e293b; padding-bottom: 10px; letter-spacing: 0.5px;}
     .vart-tag { background-color: rgba(56,189,248,0.1); border: 1px solid #38bdf8; color: #38bdf8; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 800; }
     
@@ -72,28 +72,47 @@ now = datetime.now(kiev_tz)
 market_open = now.replace(hour=16, minute=30, second=0, microsecond=0)
 is_premarket = now < market_open
 
-# --- 3. ФЕТЧИНГ ДАННЫХ ---
+# --- 3. ФЕТЧИНГ ДАННЫХ (ES=F Фьючерс для реальных объемов CVD) ---
 @st.cache_data(ttl=60)
 def fetch_market_data():
     try:
-        spx = yf.Ticker("^SPX")
-        df_candles = spx.history(period="2d", interval="5m")
+        es = yf.Ticker("ES=F") # Используем фьючерс, чтобы был реальный Volume для CVD
+        df_candles = es.history(period="2d", interval="5m")
         spot = df_candles['Close'].iloc[-1]
         prev_close = df_candles['Close'].iloc[-2] if len(df_candles) > 1 else spot
         change = spot - prev_close
         change_pct = (change / prev_close) * 100
-    except:
-        df_candles, spot, change, change_pct = pd.DataFrame(), 7811.51, 46.04, 0.59
+        
+        # Расчет CVD (Cumulative Volume Delta Proxy)
+        delta_price = df_candles['Close'] - df_candles['Open']
+        df_candles['Delta_Vol'] = np.where(delta_price > 0, df_candles['Volume'], -df_candles['Volume'])
+        df_candles['CVD'] = df_candles['Delta_Vol'].cumsum()
+        
+    except Exception:
+        df_candles = pd.DataFrame()
+        spot, change, change_pct = 5811.51, 46.04, 0.59
 
-    # Генерация профиля GEX
+    # Генерация профилей
     strikes = np.arange(int(spot) - 100, int(spot) + 100, 5)
+    
+    # GEX
     call_gex = np.exp(-((strikes - (spot + 15)) / 40)**2) * 12
     put_gex = -np.exp(-((strikes - (spot - 25)) / 35)**2) * 15
-    df_gex = pd.DataFrame({'Strike': strikes, 'Call_GEX': call_gex, 'Put_GEX': put_gex})
+    
+    # BID/ASK Volume Profile Proxy (Симуляция объемов на уровнях)
+    bid_vol = np.exp(-((strikes - spot) / 60)**2) * np.random.uniform(500, 2000, len(strikes))
+    ask_vol = np.exp(-((strikes - spot) / 60)**2) * np.random.uniform(500, 2000, len(strikes))
+    
+    df_gex = pd.DataFrame({
+        'Strike': strikes, 
+        'Call_GEX': call_gex, 
+        'Put_GEX': put_gex,
+        'Bid_Vol': -bid_vol, # Влево (Красный)
+        'Ask_Vol': ask_vol   # Вправо (Зеленый)
+    })
     df_gex['Net_GEX'] = df_gex['Call_GEX'] + df_gex['Put_GEX']
     
-    call_wall = spot + 35 
-    put_wall = spot - 40  
+    call_wall, put_wall = spot + 35, spot - 40  
     gamma_flip = spot - 12
     net_total = df_gex['Net_GEX'].sum()
     
@@ -111,7 +130,7 @@ st.markdown(f"""
 <div class="zg-header-container">
     <div>
         <div class="zg-title-top">SPX500GEX GAMMA CHART ⓘ <span class="zg-delay-badge">⏱ DELAYED ~1 MIN</span></div>
-        <h1 class="zg-main-title">SPX {spot:,.2f} <span class="{price_class}">{sign}{change:.2f} ({sign}{change_pct:.2f}%)</span></h1>
+        <h1 class="zg-main-title">SPX / ES1! {spot:,.2f} <span class="{price_class}">{sign}{change:.2f} ({sign}{change_pct:.2f}%)</span></h1>
         <div class="zg-subtitle">Delayed quote • as of {now_str}</div>
     </div>
     <div class="zg-dealer-box">
@@ -121,7 +140,7 @@ st.markdown(f"""
 </div>
 
 <div class="zg-toolbar">
-    <div class="zg-btn">SPX - 5M</div>
+    <div class="zg-btn">ES1! - 5M</div>
     <div class="zg-btn zg-btn-gold">UNLOCK LIVE - ALL SYMBOLS & TIMEFRAMES →</div>
     <div class="zg-btn-group">
         <div class="zg-btn" style="color:white;">CANDLE</div>
@@ -141,35 +160,73 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# --- 5. ГРАФИК (БЕЗОПАСНЫЙ РЕНДЕР БЕЗ ОШИБОК) ---
-fig = make_subplots(rows=1, cols=2, shared_yaxes=True, column_widths=[0.75, 0.25], horizontal_spacing=0.0)
+# --- 5. ГРАФИК (СВЕЧИ + CVD + BID/ASK PROFILE + GEX) ---
+fig = make_subplots(
+    rows=2, cols=3, 
+    shared_yaxes="rows", # Оси Y связаны только внутри своего ряда (чтобы Дельта не ломала масштаб Свечей)
+    shared_xaxes="columns", # Оси X связаны колонками (Скролл Свечей скроллит Дельту)
+    column_widths=[0.65, 0.15, 0.20], # 65% Свечи, 15% Bid/Ask, 20% GEX
+    row_heights=[0.8, 0.2], # 80% основной график, 20% Дельта
+    horizontal_spacing=0.01,
+    vertical_spacing=0.03,
+    specs=[
+        [{"type": "xy"}, {"type": "xy"}, {"type": "xy"}], # Верхний ряд
+        [{"type": "xy"}, None, None] # Нижний ряд: CVD (под свечами)
+    ]
+)
 
 if not df_candles.empty:
+    # 1. Свечи (Row 1, Col 1)
     fig.add_trace(go.Candlestick(
         x=df_candles.index.tz_convert(kiev_tz) if df_candles.index.tzinfo else df_candles.index,
         open=df_candles['Open'], high=df_candles['High'], low=df_candles['Low'], close=df_candles['Close'],
         increasing_line_color='#089981', decreasing_line_color='#f23645', name="Price"
     ), row=1, col=1)
+    
+    # 2. Cumulative Delta Line (Row 2, Col 1)
+    fig.add_trace(go.Scatter(
+        x=df_candles.index.tz_convert(kiev_tz) if df_candles.index.tzinfo else df_candles.index,
+        y=df_candles['CVD'],
+        mode='lines', line=dict(color='#38bdf8', width=1.5), fill='tozeroy', fillcolor='rgba(56,189,248,0.1)', name="CVD"
+    ), row=2, col=1)
 
+# 3. BID / ASK Volume Profile (Row 1, Col 2) - В стиле MotiveWave
+fig.add_trace(go.Bar(
+    y=df_gex['Strike'], x=df_gex['Bid_Vol'], orientation='h', marker_color='rgba(242, 54, 69, 0.7)', name="Bid Vol"
+), row=1, col=2)
+fig.add_trace(go.Bar(
+    y=df_gex['Strike'], x=df_gex['Ask_Vol'], orientation='h', marker_color='rgba(8, 153, 129, 0.7)', name="Ask Vol"
+), row=1, col=2)
+
+# 4. GEX Profile (Row 1, Col 3)
 colors = ['rgba(8, 153, 129, 0.7)' if val >= 0 else 'rgba(242, 54, 69, 0.7)' for val in df_gex['Net_GEX']]
 fig.add_trace(go.Bar(
     y=df_gex['Strike'], x=df_gex['Net_GEX'], orientation='h', marker_color=colors, showlegend=False
-), row=1, col=2)
+), row=1, col=3)
 
+# Линии уровней
 line_args = dict(line_width=1.2, opacity=0.8)
-for c in [1, 2]:
-    fig.add_hline(y=call_wall, line_dash="dash", line_color="#ef4444", annotation_text="CALL WALL", annotation_font_color="#ef4444", row=1, col=c, **line_args)
-    fig.add_hline(y=put_wall, line_dash="dash", line_color="#10b981", annotation_text="PUT WALL", annotation_font_color="#10b981", row=1, col=c, **line_args)
-    fig.add_hline(y=gamma_flip, line_dash="dashdot", line_color="#3b82f6", annotation_text="FLIP", annotation_font_color="#3b82f6", row=1, col=c, **line_args)
+for c in [1, 2, 3]:
+    fig.add_hline(y=call_wall, line_dash="dash", line_color="#ef4444", annotation_text="CALL WALL" if c==3 else "", annotation_font_color="#ef4444", row=1, col=c, **line_args)
+    fig.add_hline(y=put_wall, line_dash="dash", line_color="#10b981", annotation_text="PUT WALL" if c==3 else "", annotation_font_color="#10b981", row=1, col=c, **line_args)
+    fig.add_hline(y=gamma_flip, line_dash="dashdot", line_color="#3b82f6", annotation_text="FLIP" if c==3 else "", annotation_font_color="#3b82f6", row=1, col=c, **line_args)
 
-# Безопасное обновление параметров осей во избежание ValueError
+# Оформление и исправление ошибки title_text
 fig.update_layout(
     template="plotly_dark", plot_bgcolor="#131722", paper_bgcolor="#0b1320", 
-    height=550, margin=dict(l=0, r=0, t=0, b=0), dragmode="pan", hovermode="y unified", showlegend=False
+    height=750, margin=dict(l=0, r=0, t=15, b=0), dragmode="pan", hovermode="y unified", showlegend=False,
+    barmode='relative' # Для правильного сплита Bid (влево) / Ask (вправо)
 )
-fig.update_xaxes(showgrid=True, gridcolor="#1e293b", tickfont=dict(color="#64748b"), rangeslider_visible=False, row=1, col=1)
-fig.update_xaxes(showgrid=True, gridcolor="#1e293b", title="DEALER GAMMA BY STRIKE", titlefont=dict(size=10, color="#64748b"), tickfont=dict(color="#64748b"), row=1, col=2)
-fig.update_yaxes(showgrid=True, gridcolor="#1e293b", tickformat=".2f", side="right", fixedrange=False, tickfont=dict(color="#64748b"))
+
+# Форматирование осей
+font_fmt = dict(size=10, color="#64748b")
+fig.update_xaxes(showgrid=True, gridcolor="#1e293b", tickfont=font_fmt, rangeslider_visible=False, row=1, col=1)
+fig.update_xaxes(showgrid=True, gridcolor="#1e293b", tickfont=font_fmt, row=2, col=1)
+fig.update_xaxes(showgrid=True, gridcolor="#1e293b", title_text="VOL PROFILE", title_font=font_fmt, tickfont=font_fmt, row=1, col=2)
+fig.update_xaxes(showgrid=True, gridcolor="#1e293b", title_text="DEALER GAMMA", title_font=font_fmt, tickfont=font_fmt, row=1, col=3)
+
+fig.update_yaxes(showgrid=True, gridcolor="#1e293b", tickformat=".0f", side="right", fixedrange=False, tickfont=font_fmt, row=1, col=1)
+fig.update_yaxes(showgrid=True, gridcolor="#1e293b", side="right", fixedrange=False, tickfont=font_fmt, title_text="CVD", title_font=font_fmt, row=2, col=1)
 
 st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False})
 
@@ -185,25 +242,24 @@ with col1:
         ai_text = f"**Режим: Live RTH — {regime}**<br><br>• **Структура (T-07):** Спот ({spot:.2f}) {'выше' if spot > gamma_flip else 'ниже'} Gamma Flip ({gamma_flip:.0f}).<br>• **Каналы:** Активен <b>Breadth & Positioning</b>. Сужение базы ралли.<br>• **План:** Дилеры демпфируют волатильность. Поиск подтверждения CVD divergence у Call Wall ({call_wall:.0f}). При пробое с акцептансом — цель OVN High."
 
     st.markdown(f"""
-    <div class="widget-container" style="height: 280px;">
-        <div class="widget-header"><span class="vart-tag">AI VART ENGINE</span> Заключение сессии</div>
+    <div class="widget-container">
+        <div class="widget-header"><span class="vart-tag">AI VART ENGINE</span> ЗАКЛЮЧЕНИЕ СЕССИИ</div>
         <div class="ai-box">{ai_text}</div>
     </div>
     """, unsafe_allow_html=True)
     
-    # Интерактивный чат под блоком аналитики
     user_query = st.chat_input("Спросить ИИ по методичке VART...")
     if user_query:
-        st.info("**VART AI:** По методичке VART (T-07), пробой IBH после 10:30 (С-период) требует проверки на Acceptance. Ждем 3-5 закрытий 5m свечей за уровнем.")
+        st.info("**VART AI:** По методичке VART (T-10), дивергенция (цена растет, CVD падает) говорит об истощении агрессивных покупателей. Это сильный сигнал на возможный разворот у Gamma Wall.")
 
 with col2:
     js_scanner = """
-    <div style="background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 20px; height: 330px; display: flex; flex-direction: column; box-shadow: 0 4px 10px rgba(0,0,0,0.4);">
-        <div style="color: #f8fafc; font-size: 13px; font-weight: 800; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #1e293b; padding-bottom: 10px; letter-spacing: 0.5px;">
+    <div style="background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 15px; height: 320px; display: flex; flex-direction: column; box-shadow: 0 4px 10px rgba(0,0,0,0.4);">
+        <div style="color: #f8fafc; font-size: 13px; font-weight: 800; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #1e293b; padding-bottom: 10px; letter-spacing: 0.5px;">
             <span style="height: 10px; width: 10px; background-color: #ef4444; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px #ef4444;"></span>
             LIVE NEWS SCANNER (1s UPDATE)
         </div>
-        <div id="news-feed" style="overflow-y: auto; flex-grow: 1; padding-right: 5px; font-family: monospace; font-size: 13px;"></div>
+        <div id="news-feed" style="overflow-y: auto; flex-grow: 1; padding-right: 5px; font-family: monospace; font-size: 12px;"></div>
     </div>
     
     <script>
@@ -232,7 +288,7 @@ with col2:
             if (randomItem.impact === "yellow") color = "#facc15"; 
             if (randomItem.impact === "red") color = "#ef4444"; 
             
-            const html = `<div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #1e293b;">
+            const html = `<div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #1e293b;">
                 <span style="color: #64748b; margin-right: 12px; font-weight: 600;">${timeStr}</span>
                 <span style="color: ${color}; font-weight: ${randomItem.impact === 'white' ? 'normal' : 'bold'};">${randomItem.text}</span>
             </div>`;
