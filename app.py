@@ -7,7 +7,7 @@ import requests
 import re
 import yfinance as yf
 import pytz
-from datetime import datetime, timedelta
+from datetime import datetime
 from scipy.stats import norm
 import streamlit.components.v1 as components
 
@@ -36,7 +36,7 @@ st.markdown("""
     .zg-dealer-title { color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; }
     .zg-dealer-value { color: #10b981; font-size: 18px; font-weight: 800; font-family: monospace; }
     
-    /* Улучшенные кнопки (не сливаются с фоном) */
+    /* Кнопки тулбара */
     .zg-toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; align-items: center; }
     .zg-btn { background-color: #1e293b; border: 1px solid #475569; color: #f8fafc; padding: 6px 14px; border-radius: 6px; font-size: 11px; font-weight: 700; display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
     .zg-btn-active { background-color: rgba(56,189,248,0.15); border-color: #38bdf8; color: #38bdf8; }
@@ -57,7 +57,6 @@ st.markdown("""
     .vart-tag { background-color: rgba(56,189,248,0.1); border: 1px solid #38bdf8; color: #38bdf8; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 800; }
     .ai-box { flex-grow: 1; overflow-y: auto; color: #f1f5f9; font-size: 13px; line-height: 1.6; padding-right: 10px;}
     
-    /* Скроллбары */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
@@ -70,9 +69,10 @@ now = datetime.now(kiev_tz)
 market_open = now.replace(hour=16, minute=30, second=0, microsecond=0)
 is_premarket = now < market_open
 
-# --- 3. ФЕТЧИНГ РЕАЛЬНЫХ ОПЦИОНОВ И СВЕЧЕЙ ---
+# --- 3. ФЕТЧИНГ ДАННЫХ И ЖИВЫХ НОВОСТЕЙ ---
 @st.cache_data(ttl=60)
 def fetch_real_data():
+    # 1. Графики и Дельта
     try:
         es = yf.Ticker("ES=F")
         df_candles = es.history(period="5d", interval="5m")
@@ -88,6 +88,7 @@ def fetch_real_data():
         df_candles = pd.DataFrame()
         spot, change, change_pct = 5850.0, 0.0, 0.0
 
+    # 2. Опционы CBOE
     cboe_url = "https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -128,7 +129,6 @@ def fetch_real_data():
         df['Signed_GEX'] = np.where(df['Type'] == 'C', df['Dollar_GEX'], -df['Dollar_GEX'])
         
         df_gex = df.groupby('Strike')['Signed_GEX'].sum().reset_index()
-        # ИСПРАВЛЕНИЕ ОШИБКИ: ПЕРЕИМЕНОВЫВАЕМ СТОЛБЕЦ В Net_GEX
         df_gex.rename(columns={'Signed_GEX': 'Net_GEX'}, inplace=True)
         
         call_wall = df[df['Type'] == 'C'].groupby('Strike')['Dollar_GEX'].sum().idxmax()
@@ -142,7 +142,6 @@ def fetch_real_data():
         max_pain = spot - 5 
     else:
         strikes = np.arange(spot - 100, spot + 100, 5)
-        # ИСПРАВЛЕНИЕ: Используем Net_GEX напрямую в заглушке
         df_gex = pd.DataFrame({'Strike': strikes, 'Net_GEX': np.sin((strikes - spot)/20)*2})
         call_wall, put_wall, gamma_flip, net_total, max_pain = spot + 45, spot - 55, spot - 10, 2.5, spot
 
@@ -151,9 +150,33 @@ def fetch_real_data():
     df_gex['Bid_Vol'] = -bid_vol
     df_gex['Ask_Vol'] = ask_vol
 
-    return df_candles, spot, change, change_pct, df_gex, call_wall, put_wall, gamma_flip, net_total, max_pain
+    # 3. Реальные новости через Yahoo Finance
+    news_items = []
+    try:
+        spy_news = yf.Ticker("SPY").news
+        for n in spy_news[:15]:
+            title = n.get('title', 'Market Update').replace("'", "`").replace('"', '`')
+            ts = n.get('providerPublishTime', int(now.timestamp()))
+            time_str = datetime.fromtimestamp(ts, tz=kiev_tz).strftime('%H:%M')
+            
+            # Цветовая градация важности
+            impact = 'white'
+            tl = title.lower()
+            if any(w in tl for w in ['fed', 'cpi', 'pce', 'rate', 'powell', 'inflation', 'gdp', 'treasury']): impact = 'red'
+            elif any(w in tl for w in ['option', 'volume', 'spx', 'nasdaq', 'tech', 'earnings']): impact = 'yellow'
+            
+            news_items.append(f"{{ text: '{title}', impact: '{impact}', time: '{time_str}' }}")
+    except Exception:
+        pass
+        
+    if not news_items:
+        news_items.append(f"{{ text: 'Ожидание обновления новостного потока...', impact: 'white', time: '{now.strftime('%H:%M')}' }}")
+        
+    js_news_array = ",\n".join(news_items)
 
-df_candles, spot, change, change_pct, df_gex, call_wall, put_wall, gamma_flip, net_total, max_pain = fetch_real_data()
+    return df_candles, spot, change, change_pct, df_gex, call_wall, put_wall, gamma_flip, net_total, max_pain, js_news_array
+
+df_candles, spot, change, change_pct, df_gex, call_wall, put_wall, gamma_flip, net_total, max_pain, js_news_array = fetch_real_data()
 
 # --- 4. САЙДБАР ---
 with st.sidebar:
@@ -161,8 +184,8 @@ with st.sidebar:
     st.markdown(f"""
     <div class="sb-title">SPX <div class="sb-badge">{regime_text}</div></div>
     <div style="color: #cbd5e1; font-size: 11px; margin-bottom: 20px; line-height: 1.4;">
-        Dealers are net {'long' if net_total >= 0 else 'short'} gamma at spot - 
-        {'mean-reversion is favored, pinning is more likely, and hedging leans against breakouts.' if net_total >= 0 else 'trend expansion is favored, volatility increases, and hedging leans with breakouts.'}
+        GEX is an analytical tool for volatility and sizing, not a directional crystal ball.
+        {'Dealers are long gamma: expect range compression.' if net_total >= 0 else 'Dealers are short gamma: expect range expansion.'}
     </div>
     
     <div class="sb-item"><div><div class="sb-item-title">Reference spot</div><div class="sb-item-desc">Approximate,<br>snapshot ≥1 min ago</div></div><div class="sb-item-val">{spot:,.0f}</div></div>
@@ -194,7 +217,7 @@ st.markdown(f"""
 
 <div class="zg-toolbar">
     <div class="zg-btn">ES1! - 5M</div>
-    <div class="zg-btn zg-btn-gold">UNLOCK LIVE - ALL SYMBOLS & TIMEFRAMES →</div>
+    <div class="zg-btn zg-btn-gold">UNLOCK LIVE & TIMEFRAMES →</div>
     <div class="zg-btn zg-btn-active">CANDLES</div>
     <div class="zg-btn" style="color:#10b981; border-color:#10b981;">● PUT WALL</div>
     <div class="zg-btn" style="color:#ef4444; border-color:#ef4444;">● CALL WALL</div>
@@ -247,46 +270,48 @@ fig.update_yaxes(showgrid=True, gridcolor="#1e293b", side="right", fixedrange=Fa
 
 st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False})
 
-# --- 7. ВИДЖЕТЫ ---
+# --- 7. ВИДЖЕТЫ: ИИ ПОМОЩНИК & LIVE NEWS SCANNER ---
 st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
 col1, col2 = st.columns([0.5, 0.5])
 
 with col1:
+    # ИИ без "воды", строгие выводы, учет реального видео
     if net_total >= 0:
         ai_text = f"""
         <div style="font-size: 14px; font-weight: 700; color: #10b981; margin-bottom: 10px;">РЕЖИМ: LONG GAMMA (СЖАТИЕ ДИАПАЗОНА)</div>
-        <div style="margin-bottom: 8px;"><span style="color:#64748b; font-weight: 700;">СТРУКТУРА:</span> Спот <b>{spot:.2f}</b> торгуется выше Gamma Flip (<b>{gamma_flip:.0f}</b>). Рынок зажат между стенами.</div>
-        <div style="margin-bottom: 8px;"><span style="color:#64748b; font-weight: 700;">ORDER FLOW:</span> Следим за сессионной CVD. Если цена растет, а CVD падает — истощение покупок.</div>
-        <div style="color:#f8fafc; font-weight: 600; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 10px;">ПЛАН ДЕЙСТВИЙ:</div>
-        <ul style="margin-top: 5px; padding-left: 20px;">
-            <li><b>ШОРТ:</b> Снятие (Sweep) за Call Wall (<b>{call_wall:.0f}</b>) с возвратом. Цель: VWAP.</li>
-            <li><b>ЛОНГ:</b> Снятие ликвидности под Put Wall (<b>{put_wall:.0f}</b>) с закреплением выше. Цель: <b>{spot + 10:.0f}</b>.</li>
-            <li><b>ПРОБОИ ИГНОРИРУЕМ:</b> В Long Gamma дилеры хеджируют против тренда. Пробои стен чаще оказываются ложными.</li>
+        <div style="margin-bottom: 8px;"><span style="color:#64748b; font-weight: 700;">СТРУКТУРА:</span> Спот <b>{spot:.2f}</b> находится выше Gamma Flip (<b>{gamma_flip:.0f}</b>). Гамма выступает демпфером волатильности.</div>
+        <div style="margin-bottom: 12px;"><span style="color:#64748b; font-weight: 700;">СВОДКА:</span> GEX — не грааль направления, а инструмент сайзинга. В текущем режиме ожидаем сжатие диапазона. Дилеры балансируют портфели, продавая на росте.</div>
+        <div style="color:#f8fafc; font-weight: 800; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 12px; margin-bottom: 8px;">РАБОЧИЙ ПЛАН:</div>
+        <ul style="margin-top: 0px; padding-left: 20px;">
+            <li style="margin-bottom: 6px;"><b>ШОРТ (Отскок):</b> Тест Call Wall (<b>{call_wall:.0f}</b>). При формировании медвежьей дивергенции сессионной CVD — шорт. Цель фиксации: <b>{gamma_flip:.0f}</b>.</li>
+            <li style="margin-bottom: 6px;"><b>ЛОНГ (Возврат):</b> Снятие (Sweep) ликвидности под Put Wall (<b>{put_wall:.0f}</b>) с возвратом.</li>
+            <li><b>САЙЗИНГ:</b> В режиме Long Gamma снижаем ожидания по длине тренда. Пробои уровней чаще оказываются ложными.</li>
         </ul>
         """
     else:
         ai_text = f"""
-        <div style="font-size: 14px; font-weight: 700; color: #ef4444; margin-bottom: 10px;">РЕЖИМ: SHORT GAMMA (УСКОРЕНИЕ ТРЕНДА)</div>
-        <div style="margin-bottom: 8px;"><span style="color:#64748b; font-weight: 700;">СТРУКТУРА:</span> Спот <b>{spot:.2f}</b> пробил Gamma Flip (<b>{gamma_flip:.0f}</b>) вниз.</div>
-        <div style="margin-bottom: 8px;"><span style="color:#64748b; font-weight: 700;">ORDER FLOW:</span> Сессионная CVD подтверждает давление продавцов.</div>
-        <div style="color:#f8fafc; font-weight: 600; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 10px;">ПЛАН ДЕЙСТВИЙ:</div>
-        <ul style="margin-top: 5px; padding-left: 20px;">
-            <li><b>ШОРТ (Continuation):</b> Пробой Put Wall (<b>{put_wall:.0f}</b>) с закреплением (Acceptance). Дилеры продают по тренду.</li>
-            <li><b>ОТКАТЫ:</b> Используем отскоки вверх к уровню Flip (<b>{gamma_flip:.0f}</b>) для поиска точек входа в шорт.</li>
-            <li><b>БЕЗ КОНТРТРЕНДА:</b> Ловить ножи в Short Gamma запрещено методичкой VART.</li>
+        <div style="font-size: 14px; font-weight: 800; color: #ef4444; margin-bottom: 12px; letter-spacing: 0.5px;">РЕЖИМ: SHORT GAMMA (РАСШИРЕНИЕ ДИАПАЗОНА)</div>
+        <div style="margin-bottom: 8px;"><span style="color:#64748b; font-weight: 700;">СТРУКТУРА:</span> Спот <b>{spot:.2f}</b> ушел ниже Gamma Flip (<b>{gamma_flip:.0f}</b>).</div>
+        <div style="margin-bottom: 12px;"><span style="color:#64748b; font-weight: 700;">СВОДКА:</span> GEX предупреждает о росте дневной волатильности. Ликвидность тонкая, дилеры вынуждены хеджироваться по тренду, усиливая движения.</div>
+        <div style="color:#f8fafc; font-weight: 800; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 12px; margin-bottom: 8px;">РАБОЧИЙ ПЛАН:</div>
+        <ul style="margin-top: 0px; padding-left: 20px;">
+            <li style="margin-bottom: 6px;"><b>ШОРТ (По тренду):</b> Пробой Put Wall (<b>{put_wall:.0f}</b>) с закреплением. Сайзинг уменьшен из-за возросшего ATR. Цель: <b>{put_wall - 30:.0f}</b>.</li>
+            <li style="margin-bottom: 6px;"><b>ОТКАТЫ:</b> Ищем продажи от уровня Flip (<b>{gamma_flip:.0f}</b>) при возврате цены.</li>
+            <li><b>ИГНОРИРОВАНИЕ ЛОНГА:</b> Попытки поймать дно (Mean Reversion) в режиме Short Gamma статистически невыгодны.</li>
         </ul>
         """
 
     st.markdown(f"""
-    <div class="widget-container" style="height: 300px;">
+    <div class="widget-container" style="height: 320px;">
         <div class="widget-header"><span class="vart-tag">ИИ ПОМОЩНИК</span> СЦЕНАРИЙ СЕССИИ</div>
         <div class="ai-box">{ai_text}</div>
     </div>
     """, unsafe_allow_html=True)
 
 with col2:
-    js_scanner = """
-    <div style="background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 15px; height: 300px; display: flex; flex-direction: column; box-shadow: 0 4px 10px rgba(0,0,0,0.4);">
+    # Живой новостной сканер с реальными данными из Python
+    js_scanner = f"""
+    <div style="background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 15px; height: 320px; display: flex; flex-direction: column; box-shadow: 0 4px 10px rgba(0,0,0,0.4);">
         <div style="color: #f8fafc; font-size: 13px; font-weight: 800; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #1e293b; padding-bottom: 10px; letter-spacing: 0.5px;">
             <span style="height: 10px; width: 10px; background-color: #ef4444; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px #ef4444;"></span>
             LIVE NEWS SCANNER
@@ -296,47 +321,39 @@ with col2:
     
     <script>
         const feed = document.getElementById('news-feed');
-        const newsDatabase = [
-            { text: "SPX options volume running 15% above 20-day average", impact: "white" },
-            { text: "US 10-Year Treasury Yield spikes to 4.28% following CPI data", impact: "red" },
-            { text: "ES Futures Order Flow: Aggressive selling detected at VWAP", impact: "yellow" },
-            { text: "Market Makers positioning shifts deeper into Negative Gamma", impact: "red" },
-            { text: "AAPL block trade: 1.5M shares bought at ask", impact: "white" },
-            { text: "Breadth Check: NYSE Advance/Decline line deeply negative", impact: "yellow" },
-            { text: "FED Speak: Powell emphasizes 'data dependent' approach", impact: "red" },
-            { text: "Zero DTE Put Wall acts as strong support at 5800", impact: "yellow" },
-            { text: "Energy sector leads S&P 500 gains on rising crude oil", impact: "white" },
-            { text: "Liquidity Drain: Reverse Repo facility drops below $200B", impact: "yellow" }
+        
+        // Массив РЕАЛЬНЫХ новостей, переданный из Python API (Yahoo Finance)
+        const liveNews = [
+            {js_news_array}
         ];
         
         let currentIndex = 0;
 
-        function fetchNews() {
-            if (currentIndex >= newsDatabase.length) return; 
-
-            const now = new Date();
-            const timeStr = now.getHours().toString().padStart(2, '0') + ':' + 
-                          now.getMinutes().toString().padStart(2, '0') + ':' + 
-                          now.getSeconds().toString().padStart(2, '0');
-                          
-            const item = newsDatabase[currentIndex];
+        function displayNextNews() {{
+            if (currentIndex >= liveNews.length) return; 
             
+            const item = liveNews[currentIndex];
             let color = "#cbd5e1"; 
             if (item.impact === "yellow") color = "#facc15"; 
             if (item.impact === "red") color = "#ef4444"; 
             
-            const html = `<div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #1e293b; display: flex; align-items: flex-start;">
-                <span style="color: #64748b; margin-right: 12px; font-weight: 600; font-family: monospace;">${timeStr}</span>
-                <span style="color: ${color}; font-weight: ${item.impact === 'white' ? '500' : '700'}; line-height: 1.4;">${item.text}</span>
+            const html = `<div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #1e293b; display: flex; align-items: flex-start; opacity: 0; animation: fadeIn 0.5s forwards;">
+                <span style="color: #64748b; margin-right: 12px; font-weight: 600; font-family: monospace;">${{item.time}}</span>
+                <span style="color: ${{color}}; font-weight: ${{item.impact === 'white' ? '500' : '700'}}; line-height: 1.4;">${{item.text}}</span>
             </div>`;
             
             feed.insertAdjacentHTML('afterbegin', html);
             currentIndex++;
-        }
+        }}
 
-        fetchNews(); 
-        setTimeout(fetchNews, 2000);
-        setInterval(fetchNews, 45000);
+        // Анимация плавного появления
+        const style = document.createElement('style');
+        style.innerHTML = `@keyframes fadeIn {{ to {{ opacity: 1; }} }}`;
+        document.head.appendChild(style);
+
+        // Инициализация (Выводим сразу 3 новости, остальные медленно подгружаем)
+        displayNextNews(); displayNextNews(); displayNextNews();
+        setInterval(displayNextNews, 8000); // Каждые 8 секунд появляется новая актуальная новость
     </script>
     """
-    components.html(js_scanner, height=315)
+    components.html(js_scanner, height=335)
