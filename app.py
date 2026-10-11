@@ -7,21 +7,23 @@ import requests
 import re
 import yfinance as yf
 import pytz
-from datetime import datetime
-from scipy.stats import norm  # ИСПРАВЛЕНИЕ: вернули библиотеку для расчета Гаммы
+from datetime import datetime, timedelta
+from scipy.stats import norm
 import streamlit.components.v1 as components
 
 # ==========================================
-# 1. КОНФИГУРАЦИЯ СТРАНИЦЫ И UIX
+# 1. КОНФИГУРАЦИЯ СТРАНИЦЫ И СТИЛИ
 # ==========================================
-st.set_page_config(page_title="SPX500GEX Terminal", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="SPX500GEX Terminal", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
+    /* Темный фон терминала */
     .stApp { background-color: #0b1320; color: #cbd5e1; font-family: 'Inter', -apple-system, sans-serif; }
     header, footer, #MainMenu {visibility: hidden;}
     .block-container { padding-top: 1rem; padding-bottom: 1rem; max-width: 98%; }
     
+    /* Хедер и бейджи */
     .zg-header-container { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 15px; border-bottom: 1px solid #1e293b; padding-bottom: 10px;}
     .zg-title-top { color: #f59e0b; font-size: 11px; font-weight: 800; letter-spacing: 1px; margin-bottom: 5px; display: flex; align-items: center; gap: 10px; text-transform: uppercase;}
     .zg-delay-badge { border: 1px solid #f59e0b; color: #f59e0b; padding: 2px 8px; border-radius: 4px; font-size: 10px; }
@@ -34,11 +36,13 @@ st.markdown("""
     .zg-dealer-title { color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; }
     .zg-dealer-value { color: #10b981; font-size: 18px; font-weight: 800; font-family: monospace; }
     
+    /* Улучшенные кнопки (не сливаются с фоном) */
     .zg-toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; align-items: center; }
-    .zg-btn { background: #111827; border: 1px solid #334155; color: #94a3b8; padding: 6px 14px; border-radius: 6px; font-size: 11px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
-    .zg-btn-active { background: rgba(56,189,248,0.1); border-color: #38bdf8; color: #38bdf8; }
+    .zg-btn { background-color: #1e293b; border: 1px solid #475569; color: #f8fafc; padding: 6px 14px; border-radius: 6px; font-size: 11px; font-weight: 700; display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+    .zg-btn-active { background-color: rgba(56,189,248,0.15); border-color: #38bdf8; color: #38bdf8; }
     .zg-btn-gold { border-color: #f59e0b; color: #f59e0b; }
     
+    /* Сайдбар */
     [data-testid="stSidebar"] { background-color: #0f172a; border-right: 1px solid #1e293b;}
     .sb-title { font-size: 24px; font-weight: 800; color: white; display: flex; align-items: center; gap: 10px; margin-bottom: 20px;}
     .sb-badge { background-color: rgba(16,185,129,0.1); color: #10b981; font-size: 10px; padding: 4px 8px; border-radius: 12px; border: 1px solid #10b981; text-transform: uppercase; font-weight: 700; text-align: center; line-height: 1.2;}
@@ -47,24 +51,26 @@ st.markdown("""
     .sb-item-desc { font-size: 11px; color: #64748b; line-height: 1.3;}
     .sb-item-val { font-size: 20px; font-weight: 800; color: #f8fafc;}
     
+    /* Виджеты снизу */
     .widget-container { background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 15px; height: 300px; display: flex; flex-direction: column; box-shadow: 0 4px 10px rgba(0,0,0,0.4); }
     .widget-header { color: #f8fafc; font-size: 13px; font-weight: 800; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; text-transform: uppercase; border-bottom: 1px solid #1e293b; padding-bottom: 10px; letter-spacing: 0.5px;}
     .vart-tag { background-color: rgba(56,189,248,0.1); border: 1px solid #38bdf8; color: #38bdf8; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 800; }
     .ai-box { flex-grow: 1; overflow-y: auto; color: #f1f5f9; font-size: 13px; line-height: 1.6; padding-right: 10px;}
     
+    /* Скроллбары */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. ЛОГИКА ВРЕМЕНИ ---
+# --- 2. ЛОГИКА ВРЕМЕНИ (КИЕВ) ---
 kiev_tz = pytz.timezone('Europe/Kiev')
 now = datetime.now(kiev_tz)
 market_open = now.replace(hour=16, minute=30, second=0, microsecond=0)
 is_premarket = now < market_open
 
-# --- 3. ФЕТЧИНГ РЕАЛЬНЫХ ОПЦИОНОВ И СВЕЧЕЙ ---
+# --- 3. ФЕТЧИНГ ДАННЫХ (YF + CBOE) ---
 @st.cache_data(ttl=60)
 def fetch_real_data():
     try:
@@ -75,13 +81,16 @@ def fetch_real_data():
         change = spot - prev_close
         change_pct = (change / prev_close) * 100
         
+        # СЕССИОННАЯ CVD (Сброс каждый день)
         df_candles['Date'] = df_candles.index.date
         df_candles['Delta_Vol'] = np.where(df_candles['Close'] >= df_candles['Open'], df_candles['Volume'], -df_candles['Volume'])
         df_candles['CVD'] = df_candles.groupby('Date')['Delta_Vol'].cumsum()
+        
     except Exception:
         df_candles = pd.DataFrame()
         spot, change, change_pct = 5850.0, 0.0, 0.0
 
+    # API CBOE
     cboe_url = "https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -121,32 +130,33 @@ def fetch_real_data():
         df['Dollar_GEX'] = df['Gamma'] * df['OI'] * 100 * (spot ** 2) * 0.01 / 1e9
         df['Signed_GEX'] = np.where(df['Type'] == 'C', df['Dollar_GEX'], -df['Dollar_GEX'])
         
-        df_gex = df.groupby('Strike')['Signed_GEX'].sum().reset_index()
+        gex_profile = df.groupby('Strike')['Signed_GEX'].sum().reset_index()
         
         call_wall = df[df['Type'] == 'C'].groupby('Strike')['Dollar_GEX'].sum().idxmax()
         put_wall = df[df['Type'] == 'P'].groupby('Strike')['Dollar_GEX'].sum().idxmax()
         
-        df_gex['Cum_GEX'] = df_gex['Signed_GEX'].cumsum()
-        try: gamma_flip = df_gex.iloc[(df_gex['Cum_GEX'] - 0).abs().argsort()[:1]]['Strike'].values[0]
+        gex_profile['Cum_GEX'] = gex_profile['Signed_GEX'].cumsum()
+        try: gamma_flip = gex_profile.iloc[(gex_profile['Cum_GEX'] - 0).abs().argsort()[:1]]['Strike'].values[0]
         except: gamma_flip = spot
         
-        net_total = df_gex['Signed_GEX'].sum()
+        net_total = gex_profile['Signed_GEX'].sum()
         max_pain = spot - 5 
     else:
         strikes = np.arange(spot - 100, spot + 100, 5)
-        df_gex = pd.DataFrame({'Strike': strikes, 'Signed_GEX': np.sin((strikes - spot)/20)*2})
+        gex_profile = pd.DataFrame({'Strike': strikes, 'Signed_GEX': np.sin((strikes - spot)/20)*2})
         call_wall, put_wall, gamma_flip, net_total, max_pain = spot + 45, spot - 55, spot - 10, 2.5, spot
 
-    bid_vol = np.exp(-((df_gex['Strike'] - spot) / 60)**2) * np.random.uniform(500, 2000, len(df_gex))
-    ask_vol = np.exp(-((df_gex['Strike'] - spot) / 60)**2) * np.random.uniform(500, 2000, len(df_gex))
-    df_gex['Bid_Vol'] = -bid_vol
-    df_gex['Ask_Vol'] = ask_vol
+    # Симуляция BID/ASK Volume (Для визуализации в стиле референса)
+    bid_vol = np.exp(-((gex_profile['Strike'] - spot) / 60)**2) * np.random.uniform(500, 2000, len(gex_profile))
+    ask_vol = np.exp(-((gex_profile['Strike'] - spot) / 60)**2) * np.random.uniform(500, 2000, len(gex_profile))
+    gex_profile['Bid_Vol'] = -bid_vol
+    gex_profile['Ask_Vol'] = ask_vol
 
-    return df_candles, spot, change, change_pct, df_gex, call_wall, put_wall, gamma_flip, net_total, max_pain
+    return df_candles, spot, change, change_pct, gex_profile, call_wall, put_wall, gamma_flip, net_total, max_pain
 
 df_candles, spot, change, change_pct, df_gex, call_wall, put_wall, gamma_flip, net_total, max_pain = fetch_real_data()
 
-# --- 4. САЙДБАР ---
+# --- 4. САЙДБАР (РЕАЛЬНЫЕ УРОВНИ) ---
 with st.sidebar:
     regime_text = "POSITIVE GAMMA<br><span style='font-size:8px;'>(SUPPRESSED VOL)</span>" if net_total >= 0 else "NEGATIVE GAMMA<br><span style='font-size:8px;'>(AMPLIFIED VOL)</span>"
     st.markdown(f"""
@@ -194,9 +204,11 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# --- 6. ГРАФИК ---
+# --- 6. ГРАФИК (ИСПРАВЛЕНА ОШИБКА .last()) ---
 if not df_candles.empty:
-    df_candles = df_candles.last("2D")
+    # Фильтрация по дате (замена df.last("2D"))
+    cutoff_date = df_candles.index.max() - pd.Timedelta(days=2)
+    df_candles = df_candles[df_candles.index >= cutoff_date]
 
 fig = make_subplots(
     rows=2, cols=3, 
@@ -208,15 +220,20 @@ fig = make_subplots(
 
 if not df_candles.empty:
     x_data = df_candles.index.tz_convert(kiev_tz) if df_candles.index.tzinfo else df_candles.index
+    # Свечи
     fig.add_trace(go.Candlestick(x=x_data, open=df_candles['Open'], high=df_candles['High'], low=df_candles['Low'], close=df_candles['Close'], increasing_line_color='#10b981', decreasing_line_color='#ef4444', name="Price"), row=1, col=1)
+    # Сессионная CVD
     fig.add_trace(go.Scatter(x=x_data, y=df_candles['CVD'], mode='lines', line=dict(color='#38bdf8', width=1.5), fill='tozeroy', fillcolor='rgba(56,189,248,0.1)', name="Session CVD"), row=2, col=1)
 
+# BID / ASK Volume Profile
 fig.add_trace(go.Bar(y=df_gex['Strike'], x=df_gex['Bid_Vol'], orientation='h', marker_color='#ef4444', opacity=0.7), row=1, col=2)
 fig.add_trace(go.Bar(y=df_gex['Strike'], x=df_gex['Ask_Vol'], orientation='h', marker_color='#10b981', opacity=0.7), row=1, col=2)
 
+# GEX Profile
 colors = ['#10b981' if val >= 0 else '#ef4444' for val in df_gex['Net_GEX']]
 fig.add_trace(go.Bar(y=df_gex['Strike'], x=df_gex['Net_GEX'], orientation='h', marker_color=colors, opacity=0.8), row=1, col=3)
 
+# Линии уровней
 line_args = dict(line_width=1.5, opacity=0.8)
 for c in [1, 2, 3]:
     fig.add_hline(y=call_wall, line_dash="dash", line_color="#ef4444", annotation_text="CALL WALL" if c==3 else "", annotation_font_color="#ef4444", row=1, col=c, **line_args)
@@ -242,39 +259,41 @@ st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
 col1, col2 = st.columns([0.5, 0.5])
 
 with col1:
+    # Текст ИИ строго по методичке VART (без воды, конкретные действия)
     if net_total >= 0:
         ai_text = f"""
-        <div style="font-size: 14px; font-weight: 700; color: #10b981; margin-bottom: 10px;">РЕЖИМ: LONG GAMMA (СЖАТИЕ ДИАПАЗОНА)</div>
-        <div style="margin-bottom: 8px;"><span style="color:#64748b;">СТРУКТУРА:</span> Спот <b>{spot:.2f}</b> торгуется выше Gamma Flip (<b>{gamma_flip:.0f}</b>). Рынок зажат между стенами.</div>
-        <div style="margin-bottom: 8px;"><span style="color:#64748b;">ORDER FLOW:</span> Следим за сессионной CVD. Если цена растет, а CVD падает — истощение покупок.</div>
-        <div style="color:#f8fafc; font-weight: 600; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 10px;">ПЛАН ДЕЙСТВИЙ:</div>
-        <ul style="margin-top: 5px; padding-left: 20px;">
-            <li><b>ШОРТ:</b> Снятие (Sweep) за Call Wall (<b>{call_wall:.0f}</b>) с возвратом. Ждем подтверждения падения CVD. Цель: VWAP.</li>
-            <li><b>ЛОНГ:</b> Снятие ликвидности под Put Wall (<b>{put_wall:.0f}</b>) с закреплением выше. Цель: <b>{spot + 10:.0f}</b>.</li>
-            <li><b>ПРОБОИ НЕ ТОРГУЕМ:</b> В Long Gamma дилеры хеджируют против тренда. Пробои стен чаще оказываются ложными.</li>
+        <div style="font-size: 14px; font-weight: 800; color: #10b981; margin-bottom: 12px; letter-spacing: 0.5px;">РЕЖИМ: LONG GAMMA (СЖАТИЕ ДИАПАЗОНА)</div>
+        <div style="margin-bottom: 8px;"><span style="color:#64748b; font-weight: 700;">СТРУКТУРА:</span> Спот <b>{spot:.2f}</b> находится выше Gamma Flip (<b>{gamma_flip:.0f}</b>). Рынок в балансе между стенами маркетмейкеров.</div>
+        <div style="margin-bottom: 12px;"><span style="color:#64748b; font-weight: 700;">ORDER FLOW:</span> Сессионная CVD. Ищем дивергенции у экстремумов.</div>
+        <div style="color:#f8fafc; font-weight: 800; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 12px; margin-bottom: 8px;">ПЛАН ДЕЙСТВИЙ (ФЭЙД):</div>
+        <ul style="margin-top: 0px; padding-left: 20px;">
+            <li style="margin-bottom: 6px;"><b>ШОРТ:</b> Отскок (Rejection) от Call Wall (<b>{call_wall:.0f}</b>). Ждем формирования дивергенции CVD. Цель фиксации: VWAP.</li>
+            <li style="margin-bottom: 6px;"><b>ЛОНГ:</b> Снятие ликвидности (Sweep) под Put Wall (<b>{put_wall:.0f}</b>) с возвратом (Reclaim). Цель фиксации: <b>{spot + 15:.0f}</b>.</li>
+            <li><b>ПРОБОИ ИГНОРИРУЕМ:</b> В Long Gamma дилеры хеджируют против тренда. Пробои уровней (Breakouts) статистически часто оказываются ложными (Failed Extension).</li>
         </ul>
         """
     else:
         ai_text = f"""
-        <div style="font-size: 14px; font-weight: 700; color: #ef4444; margin-bottom: 10px;">РЕЖИМ: SHORT GAMMA (УСКОРЕНИЕ ТРЕНДА)</div>
-        <div style="margin-bottom: 8px;"><span style="color:#64748b;">СТРУКТУРА:</span> Спот <b>{spot:.2f}</b> пробил Gamma Flip (<b>{gamma_flip:.0f}</b>) вниз.</div>
-        <div style="margin-bottom: 8px;"><span style="color:#64748b;">ORDER FLOW:</span> Сессионная CVD подтверждает давление продавцов.</div>
-        <div style="color:#f8fafc; font-weight: 600; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 10px;">ПЛАН ДЕЙСТВИЙ:</div>
-        <ul style="margin-top: 5px; padding-left: 20px;">
-            <li><b>ШОРТ (Continuation):</b> Пробой Put Wall (<b>{put_wall:.0f}</b>) с закреплением (Acceptance). Дилеры продают по тренду.</li>
-            <li><b>ОТКАТЫ:</b> Используем отскоки вверх к уровню Flip (<b>{gamma_flip:.0f}</b>) для поиска точек входа в шорт.</li>
-            <li><b>БЕЗ КОНТРТРЕНДА:</b> Ловить ножи в Short Gamma запрещено методичкой VART.</li>
+        <div style="font-size: 14px; font-weight: 800; color: #ef4444; margin-bottom: 12px; letter-spacing: 0.5px;">РЕЖИМ: SHORT GAMMA (УСКОРЕНИЕ ТРЕНДА)</div>
+        <div style="margin-bottom: 8px;"><span style="color:#64748b; font-weight: 700;">СТРУКТУРА:</span> Спот <b>{spot:.2f}</b> пробил Gamma Flip (<b>{gamma_flip:.0f}</b>) вниз.</div>
+        <div style="margin-bottom: 12px;"><span style="color:#64748b; font-weight: 700;">ORDER FLOW:</span> Сессионная CVD подтверждает давление продавцов (Trend Day).</div>
+        <div style="color:#f8fafc; font-weight: 800; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 12px; margin-bottom: 8px;">ПЛАН ДЕЙСТВИЙ (ПО ТРЕНДУ):</div>
+        <ul style="margin-top: 0px; padding-left: 20px;">
+            <li style="margin-bottom: 6px;"><b>ШОРТ (Continuation):</b> Пробой Put Wall (<b>{put_wall:.0f}</b>) с закреплением (Acceptance). Дилеры продают по тренду. Цель: <b>{put_wall - 30:.0f}</b>.</li>
+            <li style="margin-bottom: 6px;"><b>ШОРТ (Pullback):</b> Откат цены к уровню Flip (<b>{gamma_flip:.0f}</b>) и формирование отскока (Rejection).</li>
+            <li><b>ЛОНГ СТРОГО ЗАПРЕЩЕН:</b> Ловить развороты (Mean Reversion) в режиме Short Gamma — прямое нарушение методички VART.</li>
         </ul>
         """
 
     st.markdown(f"""
     <div class="widget-container" style="height: 300px;">
-        <div class="widget-header"><span class="vart-tag">ИИ ПОМОЩНИК</span> СЦЕНАРИЙ СЕССИИ</div>
+        <div class="widget-header"><span class="vart-tag">ИИ ПОМОЩНИК</span> АНАЛИЗ СЕССИИ VART</div>
         <div class="ai-box">{ai_text}</div>
     </div>
     """, unsafe_allow_html=True)
 
 with col2:
+    # Улучшенный новостной сканер (Медленная загрузка без дубликатов)
     js_scanner = """
     <div style="background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 15px; height: 300px; display: flex; flex-direction: column; box-shadow: 0 4px 10px rgba(0,0,0,0.4);">
         <div style="color: #f8fafc; font-size: 13px; font-weight: 800; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #1e293b; padding-bottom: 10px; letter-spacing: 0.5px;">
@@ -303,6 +322,7 @@ with col2:
         let currentIndex = 0;
 
         function fetchNews() {
+            // Останавливаем выдачу, когда уникальные новости закончились
             if (currentIndex >= newsDatabase.length) return; 
 
             const now = new Date();
@@ -325,8 +345,11 @@ with col2:
             currentIndex++;
         }
 
+        // Загружаем первые две новости сразу
         fetchNews(); 
         setTimeout(fetchNews, 2000);
+        
+        // Медленно подгружаем остальные (раз в 45 секунд)
         setInterval(fetchNews, 45000);
     </script>
     """
