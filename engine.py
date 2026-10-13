@@ -11,8 +11,8 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 
-from . import config as C
-from .news import news_score
+import config as C
+from news import news_score
 
 SUPPORT_ORDER = [
     "VWAP", "PUT WALL", "0DTE PUT", "FLIP", "IBH", "IBL", "OVNH", "OVNL", "DO", "NYM", "RTH open",

@@ -15,9 +15,9 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from . import config as C
-from .engine import fmt, session_phase
-from .levels import add_session_cols
+import config as C
+from engine import fmt, session_phase
+from levels import add_session_cols
 
 # ---------------------------------------------------------------- пороги (плейбук)
 ACCEPT_CLOSES = 3             # мінімум закриттів 5m за рівнем (T·02: 2-3)

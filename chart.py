@@ -7,10 +7,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import config as C
+import config as C
 
 _ROOT = Path(__file__).resolve().parent
-_LIB = (_ROOT.parent / "static" / "lightweight-charts.standalone.production.js").read_text(encoding="utf-8")
+_LIB = (_ROOT / "lightweight-charts.standalone.production.js").read_text(encoding="utf-8")
 _TEMPLATE = (_ROOT / "chart_template.html").read_text(encoding="utf-8")
 
 _EPOCH = pd.Timestamp("1970-01-01")

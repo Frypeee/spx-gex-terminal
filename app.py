@@ -10,15 +10,15 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import streamlit as st
 
-from vart import chart as CH
-from vart import config as C
-from vart import data, ui
-from vart import engine as E
-from vart import flow as FL
-from vart import gex as G
-from vart import levels as L
-from vart import news as N
-from vart.cache import CACHE
+import chart as CH
+import config as C
+import data, ui
+import engine as E
+import flow as FL
+import gex as G
+import levels as L
+import news as N
+from cache import CACHE
 
 COL = C.COL
 

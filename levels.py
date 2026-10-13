@@ -11,7 +11,7 @@ from datetime import datetime, time as dtime
 import numpy as np
 import pandas as pd
 
-from . import config as C
+import config as C
 
 OHLCV = ["Open", "High", "Low", "Close", "Volume"]
 
@@ -117,7 +117,7 @@ def compute_key_levels(d5: pd.DataFrame, daily: pd.DataFrame | None, now_et: dat
 
     Визначення відповідають методичці VART (T·01, T·02): PDH/PDL це High/Low RTH-сесії попереднього дня.
     """
-    from .profile import tpo_counts, value_area
+    from tpo import tpo_counts, value_area
 
     kl = KeyLevels()
     d = add_session_cols(d5)

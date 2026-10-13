@@ -12,10 +12,10 @@ from datetime import datetime
 import pandas as pd
 import requests
 
-from . import config as C
-from .cache import CACHE, Fetched
-from .gex import parse_chain
-from .news import parse_calendar, parse_rss
+import config as C
+from cache import CACHE, Fetched
+from gex import parse_chain
+from news import parse_calendar, parse_rss
 
 
 # ---------------------------------------------------------------- Yahoo Finance

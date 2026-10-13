@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from . import config as C
-from .engine import fmt
+import config as C
+from engine import fmt
 
 COL = C.COL
 

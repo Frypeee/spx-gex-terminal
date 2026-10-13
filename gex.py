@@ -15,7 +15,7 @@ from datetime import date, datetime, time as dtime, timedelta
 import numpy as np
 import pandas as pd
 
-from . import config as C
+import config as C
 
 SQRT_2PI = math.sqrt(2.0 * math.pi)
 
