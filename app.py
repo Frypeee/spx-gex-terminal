@@ -1,359 +1,305 @@
-import streamlit as st
+"""GEX Terminal: одна сторінка для роботи за методичкою.
+
+Запуск: streamlit run app.py
+Усі дані реальні. Якщо джерело недоступне, відповідний блок показує причину, а не вигадані числа.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
 import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import requests
-import re
-import yfinance as yf
-import pytz
-from datetime import datetime
-from scipy.stats import norm
-import streamlit.components.v1 as components
+import streamlit as st
 
-# ==========================================
-# 1. КОНФИГУРАЦИЯ СТРАНИЦЫ И СТИЛИ
-# ==========================================
-st.set_page_config(page_title="SPX500GEX Terminal", layout="wide", initial_sidebar_state="collapsed")
+from vart import chart as CH
+from vart import config as C
+from vart import data, ui
+from vart import engine as E
+from vart import flow as FL
+from vart import gex as G
+from vart import levels as L
+from vart import news as N
+from vart.cache import CACHE
 
-st.markdown("""
-<style>
-    /* Темный фон терминала */
-    .stApp { background-color: #0b1320; color: #cbd5e1; font-family: 'Inter', -apple-system, sans-serif; }
-    header, footer, #MainMenu {visibility: hidden;}
-    .block-container { padding-top: 1rem; padding-bottom: 1rem; max-width: 98%; }
-    
-    /* Хедер и бейджи */
-    .zg-header-container { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 15px; border-bottom: 1px solid #1e293b; padding-bottom: 10px;}
-    .zg-title-top { color: #f59e0b; font-size: 11px; font-weight: 800; letter-spacing: 1px; margin-bottom: 5px; display: flex; align-items: center; gap: 10px; text-transform: uppercase;}
-    .zg-delay-badge { border: 1px solid #f59e0b; color: #f59e0b; padding: 2px 8px; border-radius: 4px; font-size: 10px; }
-    .zg-main-title { color: #f8fafc; font-size: 32px; font-weight: 800; margin: 0; line-height: 1; }
-    .zg-price-green { color: #10b981; font-size: 22px; font-weight: 600; }
-    .zg-price-red { color: #ef4444; font-size: 22px; font-weight: 600; }
-    .zg-subtitle { color: #64748b; font-size: 11px; margin-top: 5px; font-family: monospace; }
-    
-    .zg-dealer-box { border: 1px solid #10b981; background-color: rgba(16,185,129,0.05); padding: 8px 15px; border-radius: 6px; text-align: right; }
-    .zg-dealer-title { color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; }
-    .zg-dealer-value { color: #10b981; font-size: 18px; font-weight: 800; font-family: monospace; }
-    
-    /* Кнопки тулбара */
-    .zg-toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; align-items: center; }
-    .zg-btn { background-color: #1e293b; border: 1px solid #475569; color: #f8fafc; padding: 6px 14px; border-radius: 6px; font-size: 11px; font-weight: 700; display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
-    .zg-btn-active { background-color: rgba(56,189,248,0.15); border-color: #38bdf8; color: #38bdf8; }
-    .zg-btn-gold { border-color: #f59e0b; color: #f59e0b; }
-    
-    /* Сайдбар */
-    [data-testid="stSidebar"] { background-color: #0f172a; border-right: 1px solid #1e293b;}
-    .sb-title { font-size: 24px; font-weight: 800; color: white; display: flex; align-items: center; gap: 10px; margin-bottom: 20px;}
-    .sb-badge { background-color: rgba(16,185,129,0.1); color: #10b981; font-size: 10px; padding: 4px 8px; border-radius: 12px; border: 1px solid #10b981; text-transform: uppercase; font-weight: 700; text-align: center; line-height: 1.2;}
-    .sb-item { border-bottom: 1px solid #1e293b; padding: 15px 0; display: flex; justify-content: space-between; align-items: flex-start;}
-    .sb-item-title { font-size: 14px; font-weight: 700; color: #cbd5e1; margin-bottom: 5px;}
-    .sb-item-desc { font-size: 11px; color: #64748b; line-height: 1.3;}
-    .sb-item-val { font-size: 20px; font-weight: 800; color: #f8fafc;}
-    
-    /* Виджеты снизу */
-    .widget-container { background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 15px; height: 300px; display: flex; flex-direction: column; box-shadow: 0 4px 10px rgba(0,0,0,0.4); }
-    .widget-header { color: #f8fafc; font-size: 13px; font-weight: 800; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; text-transform: uppercase; border-bottom: 1px solid #1e293b; padding-bottom: 10px; letter-spacing: 0.5px;}
-    .vart-tag { background-color: rgba(56,189,248,0.1); border: 1px solid #38bdf8; color: #38bdf8; padding: 3px 8px; border-radius: 4px; font-size: 10px; font-weight: 800; }
-    .ai-box { flex-grow: 1; overflow-y: auto; color: #f1f5f9; font-size: 13px; line-height: 1.6; padding-right: 10px;}
-    
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
-</style>
-""", unsafe_allow_html=True)
+COL = C.COL
 
-# --- 2. ЛОГИКА ВРЕМЕНИ (КИЕВ) ---
-kiev_tz = pytz.timezone('Europe/Kiev')
-now = datetime.now(kiev_tz)
-market_open = now.replace(hour=16, minute=30, second=0, microsecond=0)
-is_premarket = now < market_open
+st.set_page_config(page_title="GEX Terminal", page_icon="◩", layout="wide", initial_sidebar_state="collapsed")
+st.markdown(ui.CSS, unsafe_allow_html=True)
 
-# --- 3. ФЕТЧИНГ ДАННЫХ И ЖИВЫХ НОВОСТЕЙ ---
-@st.cache_data(ttl=60)
-def fetch_real_data():
-    # 1. Графики и Дельта
-    try:
-        es = yf.Ticker("ES=F")
-        df_candles = es.history(period="5d", interval="5m")
-        spot = df_candles['Close'].iloc[-1]
-        prev_close = df_candles['Close'].iloc[-2] if len(df_candles) > 1 else spot
-        change = spot - prev_close
-        change_pct = (change / prev_close) * 100
-        
-        df_candles['Date'] = df_candles.index.date
-        df_candles['Delta_Vol'] = np.where(df_candles['Close'] >= df_candles['Open'], df_candles['Volume'], -df_candles['Volume'])
-        df_candles['CVD'] = df_candles.groupby('Date')['Delta_Vol'].cumsum()
-    except Exception:
-        df_candles = pd.DataFrame()
-        spot, change, change_pct = 5850.0, 0.0, 0.0
+TF_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1D"]
+LAYER_OPTIONS = ["GEX", "Рівні", "VWAP", "CVD", "Профіль", "EM"]
+BAR_CAP = {"5m": 2500, "15m": 2200, "30m": 1800, "1h": 1500, "4h": 600}
 
-    # 2. Опционы CBOE
-    cboe_url = "https://cdn.cboe.com/api/global/delayed_quotes/options/_SPX.json"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        res = requests.get(cboe_url, headers=headers, timeout=5).json()
-        options = res.get("data", {}).get("options", [])
-    except:
-        options = []
 
-    parsed = []
-    occ_pattern = re.compile(r"^[A-Z]+(?P<ymd>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$")
-    today = datetime.now().date()
+# ------------------------------------------------------------------ керування
+def pick(label, options, default, key):
+    val = st.segmented_control(label, options, default=default, key=key, label_visibility="collapsed")
+    return val or default
 
-    if options:
-        for opt in options:
-            m = occ_pattern.match(opt.get("option", ""))
-            if not m: continue
-            try: exp_date = datetime.strptime(m.group("ymd"), "%y%m%d").date()
-            except: continue
-            
-            strike = int(m.group("strike")) / 1000.0
-            if abs(strike - spot) > 200: continue
-            
-            oi = opt.get("open_interest", 0)
-            if oi <= 0: continue
-                
-            iv = float(opt.get("iv", 0.15) or 0.15)
-            T = max((exp_date - today).days, 0.04) / 365.0
-            
-            d1 = (np.log(spot / strike) + (0.045 + 0.5 * iv ** 2) * T) / (iv * np.sqrt(T))
-            gamma = norm.pdf(d1) / (spot * iv * np.sqrt(T))
-            
-            parsed.append({'Strike': strike, 'Type': m.group("cp"), 'OI': oi, 'Gamma': gamma})
 
-    df = pd.DataFrame(parsed)
+c1, c2, c3, c4, c5, c6 = st.columns([1.0, 3.2, 1.6, 1.3, 3.2, 0.9], vertical_alignment="center")
+with c1:
+    inst_key = pick("Інструмент", list(C.INSTRUMENTS), "ES", "inst")
+with c2:
+    tf = pick("Таймфрейм", TF_OPTIONS, "5m", "tf")
+with c3:
+    scope = pick("Діапазон експірацій GEX", list(C.SCOPES), "0DTE", "scope")
+with c4:
+    sess_mode = pick("Сесія CVD і VWAP", ["RTH", "Globex"], "RTH", "sess")
+with c5:
+    layers = st.pills("Шари", LAYER_OPTIONS, selection_mode="multi", default=LAYER_OPTIONS, key="layers",
+                      label_visibility="collapsed") or []
+with c6:
+    if st.button("Оновити", use_container_width=True, help="Скинути кеш і завантажити свіжі дані"):
+        CACHE.clear()
 
-    if not df.empty:
-        df['Dollar_GEX'] = df['Gamma'] * df['OI'] * 100 * (spot ** 2) * 0.01 / 1e9
-        df['Signed_GEX'] = np.where(df['Type'] == 'C', df['Dollar_GEX'], -df['Dollar_GEX'])
-        
-        df_gex = df.groupby('Strike')['Signed_GEX'].sum().reset_index()
-        df_gex.rename(columns={'Signed_GEX': 'Net_GEX'}, inplace=True)
-        
-        call_wall = df[df['Type'] == 'C'].groupby('Strike')['Dollar_GEX'].sum().idxmax()
-        put_wall = df[df['Type'] == 'P'].groupby('Strike')['Dollar_GEX'].sum().idxmax()
-        
-        df_gex['Cum_GEX'] = df_gex['Net_GEX'].cumsum()
-        try: gamma_flip = df_gex.iloc[(df_gex['Cum_GEX'] - 0).abs().argsort()[:1]]['Strike'].values[0]
-        except: gamma_flip = spot
-        
-        net_total = df_gex['Net_GEX'].sum()
-        max_pain = spot - 5 
+basis_override = float(st.session_state.get("basis_override", 0.0) or 0.0)
+
+INST = C.INSTRUMENTS[inst_key]
+now_probe = datetime.now(C.ET)
+REFRESH = "30s" if E.session_phase(now_probe)[0] in ("pre", "ib", "rth", "post") else "120s"
+
+
+# ------------------------------------------------------------------ допоміжні
+def render_chart(html: str, height: int) -> None:
+    """st.iframe у нових версіях Streamlit; components.html як запасний варіант для старих."""
+    if hasattr(st, "iframe"):
+        st.iframe(html, height=height)
+    else:  # pragma: no cover
+        import streamlit.components.v1 as components
+        components.html(html, height=height)
+
+
+def _bars_for_tf(tf, d1et, d5et, daily):
+    if tf == "1m":
+        return d1et.tail(1800) if d1et is not None else None
+    if tf == "1D":
+        return daily.tail(160) if daily is not None else None
+    src = d5et if d5et is not None else (L.resample_ohlcv(d1et, "5m") if d1et is not None else None)
+    if src is None:
+        return None
+    return L.resample_ohlcv(src, tf).tail(BAR_CAP[tf])
+
+
+def _build_levels(inst, layers, gex, basis, key, vwap, spot, scope):
+    """Повертає (специфікації для графіка, рядки таблиці, словник для рушія). Усі ціни в рівнях ф'ючерса."""
+    spec, table, eng = [], [], {}
+    sh = (lambda p: G.shift_level(p, basis, inst.tick)) if basis is not None else (lambda p: None)
+
+    def add(group_on, name, price, color, style="dashed", width=1, title=None, section=None):
+        if price is None:
+            return
+        eng[name] = price
+        if group_on:
+            spec.append(CH.level_spec(price, title or name, color, style, width))
+        table.append((section or "", name, price, color))
+
+    if gex is not None and basis is not None:
+        on = "GEX" in layers
+        table.append(("Gamma (рівні в цінах ф'ючерса)", "", None, None))
+        add(on, "CALL WALL", sh(gex.call_wall), COL["call"], "dashed", 2)
+        add(on, "PUT WALL", sh(gex.put_wall), COL["put"], "dashed", 2)
+        add(on, "FLIP", sh(gex.flip), COL["flip"], "large", 1)
+        add(on, "MAX PAIN", sh(gex.max_pain), COL["pain"], "dotted")
+        add(on, "PIN", sh(gex.pin), COL["pin"], "dotted", title="PIN 0DTE")
+        add(on, "GEX KING", sh(gex.king), COL["king"], "dotted")
+        if scope != "0DTE":
+            zc, zp = sh(gex.zero_call_wall), sh(gex.zero_put_wall)
+            if zc is not None and zc != eng.get("CALL WALL"):
+                add(on, "0DTE CALL", zc, COL["call"], "dotted", title="CALL 0DTE")
+            if zp is not None and zp != eng.get("PUT WALL"):
+                add(on, "0DTE PUT", zp, COL["put"], "dotted", title="PUT 0DTE")
+        if "EM" in layers and gex.em_1d:
+            center = key.get("RTH open") or key.get("DO") or spot
+            em = gex.em_1d
+            spec.append(CH.level_spec(center + em, "EM +1σ", COL["muted"], "dotted"))
+            spec.append(CH.level_spec(center - em, "EM −1σ", COL["muted"], "dotted"))
+            table.append(("", "EM ±1σ (день)", None, None))
+
+    if vwap is not None:
+        eng["VWAP"] = vwap
+        table.append(("Сесія", "", None, None))
+        table.append(("", "VWAP", vwap, COL["vwap"]))
+
+    on = "Рівні" in layers
+    if key is not None and key.values:
+        table.append(("Ринкові рівні", "", None, None))
+        order = [
+            ("PDH", COL["key"], "solid"), ("PDL", COL["key"], "solid"), ("OVNH", COL["on"], "dashed"),
+            ("OVNL", COL["on"], "dashed"), ("IBH", COL["ib"], "dashed"), ("IBL", COL["ib"], "dashed"),
+            ("VAH", COL["muted"], "dotted"), ("POC", "#e6c15a", "dotted"), ("VAL", COL["muted"], "dotted"),
+            ("RTH open", COL["muted"], "dotted"), ("DO", COL["muted"], "dotted"), ("NYM", "#e6c15a", "dotted"),
+            ("PWH", COL["muted"], "dotted"), ("PWL", COL["muted"], "dotted"),
+        ]
+        for name, color, style in order:
+            add(on, name, key.get(name), color, style)
+    return spec, table, eng
+
+
+def _gex_panel_col(name, f, spot_fallback, now_et, scope):
+    if f is None or not f.ok:
+        return {"name": name, "error": f"Недоступно: {f.error if f else 'немає відповіді'}"}
+    spot = f.value["spot"] or spot_fallback
+    res = G.compute_gex(f.value["df"], spot, now_et, scope) if spot else None
+    if res is None:
+        return {"name": name, "error": "Недостатньо даних для розрахунку."}
+    return {"name": name, "spot": res.spot, "call": res.call_wall, "put": res.put_wall, "flip": res.flip,
+            "pain": res.max_pain, "pin": res.pin, "net": res.net_total_b}
+
+
+# ------------------------------------------------------------------ головна панель
+@st.fragment(run_every=REFRESH)
+def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, basis_override: float):
+    inst = C.INSTRUMENTS[inst_key]
+    now_et = datetime.now(C.ET)
+    now_utc = now_et.astimezone(timezone.utc)
+
+    f1, f5, fd = data.futures_1m(inst.fut), data.futures_5m(inst.fut), data.futures_daily(inst.fut)
+    fi, fc = data.index_1m(inst.index), data.option_chain(inst.chain)
+
+    if not f1.ok and not f5.ok:
+        st.markdown(ui.header(inst.name, None, None, None, "Yahoo Finance не відповів", [ui.age_chip("Ціна", f1)], None),
+                    unsafe_allow_html=True)
+        st.error(f"Немає цінових даних для {inst.fut}: {f1.error or f5.error}. Натисніть «Оновити» або зачекайте.")
+        return
+
+    d1_utc = f1.value if f1.ok else None
+    d1et = L.to_et(d1_utc) if d1_utc is not None else None
+    d5et = L.to_et(f5.value) if f5.ok else None
+    base_et = d1et if d1et is not None else d5et
+    spot = float(base_et["Close"].iloc[-1])
+    last_bar_age = (now_et - base_et.index[-1]).total_seconds()
+
+    # Рівні і basis
+    d5_base = d5et if d5et is not None else L.resample_ohlcv(d1et, "5m")
+    key = L.compute_key_levels(d5_base, fd.value if fd.ok else None, now_et, inst.tpo_bin)
+    chain_spot = fc.value["spot"] if fc.ok else None
+    if basis_override:
+        basis, basis_src = float(basis_override), "ручний"
     else:
-        strikes = np.arange(spot - 100, spot + 100, 5)
-        df_gex = pd.DataFrame({'Strike': strikes, 'Net_GEX': np.sin((strikes - spot)/20)*2})
-        call_wall, put_wall, gamma_flip, net_total, max_pain = spot + 45, spot - 55, spot - 10, 2.5, spot
+        basis, basis_src = L.calc_basis(d1_utc, fi.value if fi.ok else None, chain_spot)
 
-    bid_vol = np.exp(-((df_gex['Strike'] - spot) / 60)**2) * np.random.uniform(500, 2000, len(df_gex))
-    ask_vol = np.exp(-((df_gex['Strike'] - spot) / 60)**2) * np.random.uniform(500, 2000, len(df_gex))
-    df_gex['Bid_Vol'] = -bid_vol
-    df_gex['Ask_Vol'] = ask_vol
+    # GEX
+    gex = None
+    if fc.ok and basis is not None:
+        gex = G.compute_gex(fc.value["df"], spot - basis, now_et, scope)
 
-    # 3. Реальные новости через Yahoo Finance
-    news_items = []
-    try:
-        spy_news = yf.Ticker("SPY").news
-        for n in spy_news[:15]:
-            title = n.get('title', 'Market Update').replace("'", "`").replace('"', '`')
-            ts = n.get('providerPublishTime', int(now.timestamp()))
-            time_str = datetime.fromtimestamp(ts, tz=kiev_tz).strftime('%H:%M')
-            
-            # Цветовая градация важности
-            impact = 'white'
-            tl = title.lower()
-            if any(w in tl for w in ['fed', 'cpi', 'pce', 'rate', 'powell', 'inflation', 'gdp', 'treasury']): impact = 'red'
-            elif any(w in tl for w in ['option', 'volume', 'spx', 'nasdaq', 'tech', 'earnings']): impact = 'yellow'
-            
-            news_items.append(f"{{ text: '{title}', impact: '{impact}', time: '{time_str}' }}")
-    except Exception:
-        pass
-        
-    if not news_items:
-        news_items.append(f"{{ text: 'Ожидание обновления новостного потока...', impact: 'white', time: '{now.strftime('%H:%M')}' }}")
-        
-    js_news_array = ",\n".join(news_items)
+    # VWAP і CVD
+    mode_eff = "Globex" if (sess_mode == "RTH" and not key.rth_started) else sess_mode
+    sv_disp, sv_eng, px_eng, cvd_eng, vwap = None, None, None, None, None
+    if d1et is not None:
+        sv_all = L.session_vwap_cvd(d1et, sess_mode)
+        sv_disp = L.to_display_tf(sv_all, tf)
+        sv_eng = sv_all if mode_eff == sess_mode else L.session_vwap_cvd(d1et, mode_eff)
+        if not sv_eng.empty:
+            cur = sv_eng[sv_eng["sess"] == sv_eng["sess"].iloc[-1]]
+            if (now_et - cur.index[-1]) < timedelta(minutes=30):
+                cvd_eng, px_eng = cur["cvd"], d1et["Close"].reindex(cur.index)
+                vwap = float(cur["vwap"].iloc[-1])
 
-    return df_candles, spot, change, change_pct, df_gex, call_wall, put_wall, gamma_flip, net_total, max_pain, js_news_array
+    # Заголовок
+    pdc = key.get("PD close")
+    chg = spot - pdc if pdc else None
+    chg_pct = chg / pdc * 100 if pdc else None
+    phase, phase_text = E.session_phase(now_et)
+    kyiv = now_et.astimezone(C.KYIV)
+    chips = [
+        ui.age_chip("Ціна", f1 if f1.ok else f5, 90),
+        ui.chip(f"Остання свічка: {ui._dur(last_bar_age)} тому",
+                "warn" if (phase != "closed" and last_bar_age > 600) else "ok"),
+        ui.age_chip("GEX CBOE (~15 хв)", fc, 240),
+        ui.chip("Basis " + (f"{basis:+.2f} ({basis_src})" if basis is not None else "н/д"), "" if basis is not None else "bad"),
+    ]
+    sub = (f"Yahoo Finance · оновлено {kyiv:%d.%m %H:%M:%S} за Києвом · "
+           f"зміна до закриття RTH {fmt_pct(chg_pct)}")
+    st.markdown(ui.header(inst.name, spot, chg, chg_pct, sub, chips, gex), unsafe_allow_html=True)
 
-df_candles, spot, change, change_pct, df_gex, call_wall, put_wall, gamma_flip, net_total, max_pain, js_news_array = fetch_real_data()
+    if gex is None:
+        why = ("CBOE: " + (fc.error or "немає даних")) if not fc.ok else "basis не визначено (немає індексу й spot CBOE)"
+        st.warning(f"Рівні GEX не показано: {why}. Свічки, рівні дня й CVD працюють.")
 
-# --- 4. САЙДБАР ---
-with st.sidebar:
-    regime_text = "POSITIVE GAMMA<br><span style='font-size:8px;'>(SUPPRESSED VOL)</span>" if net_total >= 0 else "NEGATIVE GAMMA<br><span style='font-size:8px;'>(AMPLIFIED VOL)</span>"
-    st.markdown(f"""
-    <div class="sb-title">SPX <div class="sb-badge">{regime_text}</div></div>
-    <div style="color: #cbd5e1; font-size: 11px; margin-bottom: 20px; line-height: 1.4;">
-        GEX is an analytical tool for volatility and sizing, not a directional crystal ball.
-        {'Dealers are long gamma: expect range compression.' if net_total >= 0 else 'Dealers are short gamma: expect range expansion.'}
-    </div>
-    
-    <div class="sb-item"><div><div class="sb-item-title">Reference spot</div><div class="sb-item-desc">Approximate,<br>snapshot ≥1 min ago</div></div><div class="sb-item-val">{spot:,.0f}</div></div>
-    <div class="sb-item"><div><div class="sb-item-title">Call wall</div><div class="sb-item-desc" style="color:#ef4444;">Heaviest call gamma<br>above spot</div></div><div class="sb-item-val">{call_wall:,.0f}</div></div>
-    <div class="sb-item"><div><div class="sb-item-title">Put wall</div><div class="sb-item-desc" style="color:#10b981;">Heaviest put gamma<br>below spot</div></div><div class="sb-item-val">{put_wall:,.0f}</div></div>
-    <div class="sb-item"><div><div class="sb-item-title">Gamma flip</div><div class="sb-item-desc" style="color:#3b82f6;">Regime line - above =<br>positive, below = negative</div></div><div class="sb-item-val">{gamma_flip:,.0f}</div></div>
-    <div class="sb-item"><div><div class="sb-item-title">Max pain</div><div class="sb-item-desc" style="color:#eab308;">Strike where the most<br>contracts expire worthless</div></div><div class="sb-item-val">{max_pain:,.0f}</div></div>
-    <div class="sb-item" style="border-bottom:none; align-items: center;"><div><div class="sb-item-title">Net dealer<br>GEX (at spot)</div></div><div class="sb-item-val" style="color:white; font-size:24px;">{"+" if net_total >=0 else "-"}${abs(net_total):.2f}B</div></div>
-    """, unsafe_allow_html=True)
+    # Рівні
+    spec, table_rows, eng_levels = _build_levels(inst, layers, gex, basis, key, vwap, spot, scope)
 
-# --- 5. ХЕДЕР И ТУЛБАР ---
-now_str = now.strftime("%b %d, %Y, %H:%M:%S ET")
-sign = "+" if change >= 0 else ""
-price_class = "zg-price-green" if change >= 0 else "zg-price-red"
-gex_regime = "LONG Γ" if net_total >= 0 else "SHORT Γ"
+    # Графік + права колонка
+    bars = _bars_for_tf(tf, d1et, d5et, fd.value if fd.ok else None)
+    left, right = st.columns([4.3, 1.2], gap="small")
+    with left:
+        if bars is None or bars.empty:
+            st.error("Немає свічок для обраного таймфрейму.")
+        else:
+            profile = []
+            if "Профіль" in layers and gex is not None and basis is not None:
+                profile = [{"price": G.shift_level(r.strike, basis, inst.tick), "v": float(r.net)}
+                           for r in gex.profile.itertuples()]
+            html = CH.build_chart_html(
+                title=f"{inst.key}1!  {tf}", key=f"{inst.key}_{tf}", tf=tf, bars=bars, levels=spec, profile=profile,
+                sv=sv_disp, show_vwap="VWAP" in layers, show_cvd="CVD" in layers)
+            render_chart(html, 700)
+    with right:
+        st.markdown('<div class="panel scroll"><div class="ph">Рівні<span class="src">відстань до ціни, п.</span></div>'
+                    + ui.levels_table(table_rows, spot) + "</div>", unsafe_allow_html=True)
 
-st.markdown(f"""
-<div class="zg-header-container">
-    <div>
-        <div class="zg-title-top">SPX500GEX GAMMA CHART ⓘ <span class="zg-delay-badge">⏱ DELAYED ~1 MIN</span></div>
-        <h1 class="zg-main-title">SPX / ES1! {spot:,.2f} <span class="{price_class}">{sign}{change:.2f} ({sign}{change_pct:.2f}%)</span></h1>
-        <div class="zg-subtitle">Delayed quote • as of {now_str}</div>
-    </div>
-    <div class="zg-dealer-box">
-        <div class="zg-dealer-title">DEALER GAMMA @ SPOT</div>
-        <div class="zg-dealer-value">📉 {gex_regime} {sign}${abs(net_total):.2f}B</div>
-    </div>
-</div>
+    # Огляд дня і VART Flow
+    news_f, cal_f = data.news_items(), data.calendar_events()
+    fng_f, sec_f, mac_f = data.fear_greed(), data.sector_performance(), data.macro_snapshot()
+    news_sel = N.select_news(news_f.value["items"], now_utc) if news_f.ok else None
+    events_all = cal_f.value if cal_f.ok else []
+    br_f = data.breadth_snapshot()
+    flow = FL.compute_flow(inst=inst, d5=d5_base, kl=key, atr=L.atr20(fd.value if fd.ok else None, key.td), now_et=now_et,
+                           px1m=px_eng, cvd1m=cvd_eng, events=events_all, breadth=br_f.value if br_f.ok else None)
+    st.markdown(ui.flow_card(flow), unsafe_allow_html=True)
 
-<div class="zg-toolbar">
-    <div class="zg-btn">ES1! - 5M</div>
-    <div class="zg-btn zg-btn-gold">UNLOCK LIVE & TIMEFRAMES →</div>
-    <div class="zg-btn zg-btn-active">CANDLES</div>
-    <div class="zg-btn" style="color:#10b981; border-color:#10b981;">● PUT WALL</div>
-    <div class="zg-btn" style="color:#ef4444; border-color:#ef4444;">● CALL WALL</div>
-    <div class="zg-btn" style="color:#3b82f6; border-color:#3b82f6;">● FLIP</div>
-    <div class="zg-btn" style="color:#eab308; border-color:#eab308;">● MAX PAIN</div>
-</div>
-""", unsafe_allow_html=True)
+    read = E.build_read(
+        inst=inst, spot=spot, basis=basis, levels=eng_levels, gex=gex, key=key, d5=d5et, px1m=px_eng, cvd1m=cvd_eng,
+        vwap=vwap, now_et=now_et, news=news_sel, macro=mac_f.value if mac_f.ok else None,
+        fng=fng_f.value if fng_f.ok else None, sectors=sec_f.value if sec_f.ok else None, events=events_all, flow=flow)
 
-# --- 6. ГРАФИК ---
-if not df_candles.empty:
-    cutoff_date = df_candles.index.max() - pd.Timedelta(days=2)
-    df_candles = df_candles[df_candles.index >= cutoff_date]
+    st.markdown(ui.read_card(read, gex.notes if gex else []), unsafe_allow_html=True)
 
-fig = make_subplots(
-    rows=2, cols=3, 
-    shared_yaxes="rows", shared_xaxes="columns", 
-    column_widths=[0.65, 0.15, 0.20], row_heights=[0.8, 0.2], 
-    horizontal_spacing=0.01, vertical_spacing=0.03,
-    specs=[[{"type": "xy"}, {"type": "xy"}, {"type": "xy"}], [{"type": "xy"}, None, None]]
-)
+    col_a, col_b, col_c = st.columns([1.25, 1.1, 1.0], gap="small")
+    with col_a:
+        st.markdown(ui.scenario_card(read, inst.key), unsafe_allow_html=True)
+    with col_b:
+        upcoming = [e for e in events_all if now_utc - timedelta(minutes=30) <= e["ts"] <= now_utc + timedelta(hours=24)]
+        stale = None
+        if news_f.stale:
+            stale = f"застаріло на {ui._dur(news_f.age)}"
+        errs = news_f.value["errors"] if news_f.ok else [news_f.error or ""]
+        st.markdown(ui.news_card(news_sel or [], upcoming, now_utc, errs, stale), unsafe_allow_html=True)
+    with col_c:
+        yard_f = data.yardeni_charts()
+        ynote = ("Графіки Yardeni (прогнозні EPS і маржа) нижче." if yard_f.ok
+                 else "Yardeni не віддав графіки автоматично, відкрийте сторінку за посиланням нижче.")
+        st.markdown(ui.macro_card(mac_f.value if mac_f.ok else None, fng_f.value if fng_f.ok else None,
+                                  sec_f.value if sec_f.ok else None, [], ynote), unsafe_allow_html=True)
+        with st.expander("Yardeni, SSGA, CNN: джерела"):
+            for title, url in C.YARDENI_PAGES:
+                st.link_button(f"Yardeni: {title}", url, use_container_width=True)
+            st.link_button("SSGA Sector Tracker", C.SSGA_PAGE, use_container_width=True)
+            st.link_button("CNN Fear & Greed", C.FNG_PAGE, use_container_width=True)
+            if yard_f.ok:
+                for ch in yard_f.value:
+                    st.image(ch["img"], caption=ch["page"], use_container_width=True)
 
-if not df_candles.empty:
-    x_data = df_candles.index.tz_convert(kiev_tz) if df_candles.index.tzinfo else df_candles.index
-    fig.add_trace(go.Candlestick(x=x_data, open=df_candles['Open'], high=df_candles['High'], low=df_candles['Low'], close=df_candles['Close'], increasing_line_color='#10b981', decreasing_line_color='#ef4444', name="Price"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=x_data, y=df_candles['CVD'], mode='lines', line=dict(color='#38bdf8', width=1.5), fill='tozeroy', fillcolor='rgba(56,189,248,0.1)', name="Session CVD"), row=2, col=1)
+    # Порівняльна панель
+    st.markdown('<div style="height:2px"></div><div class="muted" style="font:600 13px var(--sans);margin:6px 0 4px">'
+                f'Gamma за базовими активами ({scope})</div>', unsafe_allow_html=True)
+    chains = data.panel_chains()
+    cols = [_gex_panel_col(name, chains[name], None, now_et, scope) for name, _ in C.PANEL_CHAINS]
+    st.markdown(ui.compare_panel(cols), unsafe_allow_html=True)
+    st.markdown('<p class="muted" style="font:400 11px var(--sans);margin-top:10px">GEX рахується за відкритим інтересом CBOE '
+                '(затримка ~15 хв) і поточною ціною; конвенція: дилери довгі кол-опціони й короткі пут-опціони. '
+                'CVD оцінюється за 1-хвилинними свічками Yahoo без тикових даних. Графік: TradingView Lightweight Charts™.</p>',
+                unsafe_allow_html=True)
 
-fig.add_trace(go.Bar(y=df_gex['Strike'], x=df_gex['Bid_Vol'], orientation='h', marker_color='#ef4444', opacity=0.7), row=1, col=2)
-fig.add_trace(go.Bar(y=df_gex['Strike'], x=df_gex['Ask_Vol'], orientation='h', marker_color='#10b981', opacity=0.7), row=1, col=2)
 
-colors = ['#10b981' if val >= 0 else '#ef4444' for val in df_gex['Net_GEX']]
-fig.add_trace(go.Bar(y=df_gex['Strike'], x=df_gex['Net_GEX'], orientation='h', marker_color=colors, opacity=0.8), row=1, col=3)
+def fmt_pct(v):
+    return "н/д" if v is None else f"{v:+.2f}%"
 
-line_args = dict(line_width=1.5, opacity=0.8)
-for c in [1, 2, 3]:
-    fig.add_hline(y=call_wall, line_dash="dash", line_color="#ef4444", annotation_text="CALL WALL" if c==3 else "", annotation_font_color="#ef4444", row=1, col=c, **line_args)
-    fig.add_hline(y=put_wall, line_dash="dash", line_color="#10b981", annotation_text="PUT WALL" if c==3 else "", annotation_font_color="#10b981", row=1, col=c, **line_args)
-    fig.add_hline(y=gamma_flip, line_dash="dashdot", line_color="#3b82f6", annotation_text="FLIP" if c==3 else "", annotation_font_color="#3b82f6", row=1, col=c, **line_args)
 
-fig.update_layout(
-    template="plotly_dark", plot_bgcolor="#131722", paper_bgcolor="#0b1320", 
-    height=600, margin=dict(l=0, r=0, t=10, b=0), dragmode="pan", hovermode="y unified", showlegend=False, barmode='relative'
-)
-font_fmt = dict(size=10, color="#64748b")
-fig.update_xaxes(showgrid=True, gridcolor="#1e293b", tickfont=font_fmt, rangeslider_visible=False, row=1, col=1)
-fig.update_xaxes(showgrid=True, gridcolor="#1e293b", tickfont=font_fmt, row=2, col=1)
-fig.update_xaxes(showgrid=True, gridcolor="#1e293b", title_text="VOL PROFILE", title_font=font_fmt, tickfont=font_fmt, row=1, col=2)
-fig.update_xaxes(showgrid=True, gridcolor="#1e293b", title_text="DEALER GAMMA", title_font=font_fmt, tickfont=font_fmt, row=1, col=3)
-fig.update_yaxes(showgrid=True, gridcolor="#1e293b", tickformat=".0f", side="right", fixedrange=False, tickfont=font_fmt, row=1, col=1)
-fig.update_yaxes(showgrid=True, gridcolor="#1e293b", side="right", fixedrange=False, tickfont=font_fmt, title_text="SESSION CVD", title_font=font_fmt, row=2, col=1)
+terminal(inst_key, tf, scope, sess_mode, tuple(layers), basis_override)
 
-st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False})
-
-# --- 7. ВИДЖЕТЫ: ИИ ПОМОЩНИК & LIVE NEWS SCANNER ---
-st.markdown("<div style='height: 5px;'></div>", unsafe_allow_html=True)
-col1, col2 = st.columns([0.5, 0.5])
-
-with col1:
-    # ИИ без "воды", строгие выводы, учет реального видео
-    if net_total >= 0:
-        ai_text = f"""
-        <div style="font-size: 14px; font-weight: 700; color: #10b981; margin-bottom: 10px;">РЕЖИМ: LONG GAMMA (СЖАТИЕ ДИАПАЗОНА)</div>
-        <div style="margin-bottom: 8px;"><span style="color:#64748b; font-weight: 700;">СТРУКТУРА:</span> Спот <b>{spot:.2f}</b> находится выше Gamma Flip (<b>{gamma_flip:.0f}</b>). Гамма выступает демпфером волатильности.</div>
-        <div style="margin-bottom: 12px;"><span style="color:#64748b; font-weight: 700;">СВОДКА:</span> GEX — не грааль направления, а инструмент сайзинга. В текущем режиме ожидаем сжатие диапазона. Дилеры балансируют портфели, продавая на росте.</div>
-        <div style="color:#f8fafc; font-weight: 800; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 12px; margin-bottom: 8px;">РАБОЧИЙ ПЛАН:</div>
-        <ul style="margin-top: 0px; padding-left: 20px;">
-            <li style="margin-bottom: 6px;"><b>ШОРТ (Отскок):</b> Тест Call Wall (<b>{call_wall:.0f}</b>). При формировании медвежьей дивергенции сессионной CVD — шорт. Цель фиксации: <b>{gamma_flip:.0f}</b>.</li>
-            <li style="margin-bottom: 6px;"><b>ЛОНГ (Возврат):</b> Снятие (Sweep) ликвидности под Put Wall (<b>{put_wall:.0f}</b>) с возвратом.</li>
-            <li><b>САЙЗИНГ:</b> В режиме Long Gamma снижаем ожидания по длине тренда. Пробои уровней чаще оказываются ложными.</li>
-        </ul>
-        """
-    else:
-        ai_text = f"""
-        <div style="font-size: 14px; font-weight: 800; color: #ef4444; margin-bottom: 12px; letter-spacing: 0.5px;">РЕЖИМ: SHORT GAMMA (РАСШИРЕНИЕ ДИАПАЗОНА)</div>
-        <div style="margin-bottom: 8px;"><span style="color:#64748b; font-weight: 700;">СТРУКТУРА:</span> Спот <b>{spot:.2f}</b> ушел ниже Gamma Flip (<b>{gamma_flip:.0f}</b>).</div>
-        <div style="margin-bottom: 12px;"><span style="color:#64748b; font-weight: 700;">СВОДКА:</span> GEX предупреждает о росте дневной волатильности. Ликвидность тонкая, дилеры вынуждены хеджироваться по тренду, усиливая движения.</div>
-        <div style="color:#f8fafc; font-weight: 800; margin-top: 15px; border-top: 1px solid #1e293b; padding-top: 12px; margin-bottom: 8px;">РАБОЧИЙ ПЛАН:</div>
-        <ul style="margin-top: 0px; padding-left: 20px;">
-            <li style="margin-bottom: 6px;"><b>ШОРТ (По тренду):</b> Пробой Put Wall (<b>{put_wall:.0f}</b>) с закреплением. Сайзинг уменьшен из-за возросшего ATR. Цель: <b>{put_wall - 30:.0f}</b>.</li>
-            <li style="margin-bottom: 6px;"><b>ОТКАТЫ:</b> Ищем продажи от уровня Flip (<b>{gamma_flip:.0f}</b>) при возврате цены.</li>
-            <li><b>ИГНОРИРОВАНИЕ ЛОНГА:</b> Попытки поймать дно (Mean Reversion) в режиме Short Gamma статистически невыгодны.</li>
-        </ul>
-        """
-
-    st.markdown(f"""
-    <div class="widget-container" style="height: 320px;">
-        <div class="widget-header"><span class="vart-tag">ИИ ПОМОЩНИК</span> СЦЕНАРИЙ СЕССИИ</div>
-        <div class="ai-box">{ai_text}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    # Живой новостной сканер с реальными данными из Python
-    js_scanner = f"""
-    <div style="background-color: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 15px; height: 320px; display: flex; flex-direction: column; box-shadow: 0 4px 10px rgba(0,0,0,0.4);">
-        <div style="color: #f8fafc; font-size: 13px; font-weight: 800; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #1e293b; padding-bottom: 10px; letter-spacing: 0.5px;">
-            <span style="height: 10px; width: 10px; background-color: #ef4444; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px #ef4444;"></span>
-            LIVE NEWS SCANNER
-        </div>
-        <div id="news-feed" style="overflow-y: auto; flex-grow: 1; padding-right: 5px; font-family: 'Inter', sans-serif; font-size: 12px;"></div>
-    </div>
-    
-    <script>
-        const feed = document.getElementById('news-feed');
-        
-        // Массив РЕАЛЬНЫХ новостей, переданный из Python API (Yahoo Finance)
-        const liveNews = [
-            {js_news_array}
-        ];
-        
-        let currentIndex = 0;
-
-        function displayNextNews() {{
-            if (currentIndex >= liveNews.length) return; 
-            
-            const item = liveNews[currentIndex];
-            let color = "#cbd5e1"; 
-            if (item.impact === "yellow") color = "#facc15"; 
-            if (item.impact === "red") color = "#ef4444"; 
-            
-            const html = `<div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #1e293b; display: flex; align-items: flex-start; opacity: 0; animation: fadeIn 0.5s forwards;">
-                <span style="color: #64748b; margin-right: 12px; font-weight: 600; font-family: monospace;">${{item.time}}</span>
-                <span style="color: ${{color}}; font-weight: ${{item.impact === 'white' ? '500' : '700'}}; line-height: 1.4;">${{item.text}}</span>
-            </div>`;
-            
-            feed.insertAdjacentHTML('afterbegin', html);
-            currentIndex++;
-        }}
-
-        // Анимация плавного появления
-        const style = document.createElement('style');
-        style.innerHTML = `@keyframes fadeIn {{ to {{ opacity: 1; }} }}`;
-        document.head.appendChild(style);
-
-        // Инициализация (Выводим сразу 3 новости, остальные медленно подгружаем)
-        displayNextNews(); displayNextNews(); displayNextNews();
-        setInterval(displayNextNews, 8000); // Каждые 8 секунд появляется новая актуальная новость
-    </script>
-    """
-    components.html(js_scanner, height=335)
+with st.expander("Налаштування"):
+    st.number_input(
+        "Ручний basis (ф'ючерс − індекс). 0 = автоматично", value=0.0, step=0.25, format="%.2f", key="basis_override",
+        help="Потрібен лише якщо автоматичний basis виглядає хибно.")

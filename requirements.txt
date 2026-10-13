@@ -1,9 +1,6 @@
-streamlit
-pandas
-numpy
-plotly
-requests
-scipy
-pytz
-yfinance
-streamlit-autorefresh
+streamlit>=1.42
+pandas>=2.1
+numpy>=1.26
+requests>=2.31
+yfinance>=0.2.54
+tzdata

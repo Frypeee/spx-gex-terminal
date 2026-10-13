@@ -1,0 +1,211 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+  html, body { margin: 0; height: 100%; background: #0a0f18; overflow: hidden; }
+  #wrap { position: relative; height: 100%; width: 100%; }
+  #chart { position: absolute; inset: 0; }
+  #legend {
+    position: absolute; left: 10px; top: 8px; z-index: 5; pointer-events: none;
+    font: 500 12px/1.5 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; color: #8b97b1;
+    text-shadow: 0 0 4px #0a0f18, 0 0 8px #0a0f18;
+  }
+  #legend b { color: #d8e0ee; font-weight: 500; }
+  #legend .t { font: 600 13px 'IBM Plex Sans', system-ui, sans-serif; color: #d8e0ee; margin-right: 8px; }
+  #legend .up { color: #26a69a; } #legend .dn { color: #ef5350; }
+  #tools { position: absolute; left: 10px; bottom: 44px; z-index: 6; display: flex; gap: 6px; }
+  #tools button {
+    background: #101827; color: #aab6cf; border: 1px solid #263451; border-radius: 4px; cursor: pointer;
+    font: 500 11px 'IBM Plex Sans', system-ui, sans-serif; padding: 4px 9px;
+  }
+  #tools button:hover { border-color: #6aa9ff; color: #fff; }
+  #tools button:focus-visible { outline: 2px solid #6aa9ff; outline-offset: 1px; }
+  #err { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+         color: #ef9a9a; font: 500 14px 'IBM Plex Sans', sans-serif; text-align: center; padding: 24px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="chart"></div>
+  <div id="legend"></div>
+  <div id="tools"><button id="btn-fit" title="Повернутися до поточного часу">До поточного</button><button id="btn-reset" title="Скинути масштаб">Скинути</button></div>
+  <div id="err"></div>
+</div>
+<script>__LIB__</script>
+<script>
+(function () {
+  const P = __PAYLOAD__;
+  const showErr = (m) => { const e = document.getElementById('err'); e.style.display = 'flex'; e.textContent = m; };
+  if (!window.LightweightCharts) { showErr('Не вдалося завантажити бібліотеку графіка.'); return; }
+  const LW = window.LightweightCharts;
+  const el = document.getElementById('chart');
+  const FONT = "'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace";
+
+  const chart = LW.createChart(el, {
+    autoSize: true,
+    layout: {
+      background: { type: 'solid', color: '#0a0f18' }, textColor: '#8b97b1', fontFamily: FONT, fontSize: 11,
+      panes: { separatorColor: '#1e2a3f', separatorHoverColor: '#33466b', enableResize: true },
+    },
+    grid: { vertLines: { color: 'rgba(30,42,63,0.5)' }, horzLines: { color: 'rgba(30,42,63,0.5)' } },
+    crosshair: {
+      mode: LW.CrosshairMode.Normal,
+      vertLine: { color: '#52617f', labelBackgroundColor: '#1e2a3f' },
+      horzLine: { color: '#52617f', labelBackgroundColor: '#1e2a3f' },
+    },
+    rightPriceScale: { borderColor: '#1e2a3f', scaleMargins: { top: 0.06, bottom: 0.14 } },
+    timeScale: { borderColor: '#1e2a3f', timeVisible: !P.daily, secondsVisible: false, rightOffset: 14, barSpacing: P.bar_spacing || 7, minBarSpacing: 1.5 },
+    localization: { priceFormatter: (p) => p.toFixed(2) },
+    handleScale: { axisPressedMouseMove: { time: true, price: true }, mouseWheel: true, pinch: true },
+    handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+  });
+
+  // ---- Свічки і обсяг (панель 0)
+  const candles = chart.addSeries(LW.CandlestickSeries, {
+    upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
+    wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+    priceFormat: { type: 'price', precision: 2, minMove: 0.25 },
+  }, 0);
+  candles.setData(P.candles);
+
+  const vol = chart.addSeries(LW.HistogramSeries, {
+    priceFormat: { type: 'volume' }, priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false,
+  }, 0);
+  vol.priceScale().applyOptions({ scaleMargins: { top: 0.88, bottom: 0 } });
+  vol.setData(P.volume);
+
+  // ---- VWAP (сесійний) з ±1σ
+  (P.vwap || []).forEach((s) => {
+    const mk = (data, color, w, style) => {
+      if (!data || !data.length) return;
+      const l = chart.addSeries(LW.LineSeries, {
+        color, lineWidth: w, lineStyle: style, priceLineVisible: false, lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      }, 0);
+      l.setData(data);
+    };
+    mk(s.u, 'rgba(143,163,200,0.45)', 1, 2);
+    mk(s.l, 'rgba(143,163,200,0.45)', 1, 2);
+    mk(s.v, '#8fa3c8', 2, 0);
+  });
+
+  // ---- Горизонтальні рівні
+  (P.levels || []).forEach((lv) => {
+    candles.createPriceLine({
+      price: lv.price, color: lv.color, lineWidth: lv.width || 1, lineStyle: lv.style ?? 2,
+      axisLabelVisible: true, title: lv.title,
+    });
+  });
+
+  // ---- GEX-профіль, намальований прямо на шкалі цін (рухається разом із графіком)
+  class ProfileRenderer {
+    constructor(src) { this.s = src; }
+    draw(target) {
+      const s = this.s;
+      if (!s.series || !s.rows.length) return;
+      target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
+        const W = mediaSize.width, maxW = Math.min(170, W * 0.17);
+        const ys = s.rows.map((r) => s.series.priceToCoordinate(r.price));
+        let step = 6;
+        for (let i = 1; i < ys.length; i++) {
+          if (ys[i] != null && ys[i - 1] != null) { step = Math.abs(ys[i] - ys[i - 1]); break; }
+        }
+        const h = Math.max(2, Math.min(step - 1, 14));
+        s.rows.forEach((r, i) => {
+          const y = ys[i];
+          if (y == null) return;
+          const w = Math.max(1, Math.abs(r.v) / s.max * maxW);
+          ctx.fillStyle = r.v >= 0 ? 'rgba(47,212,160,0.38)' : 'rgba(242,86,107,0.38)';
+          ctx.fillRect(W - w, y - h / 2, w, h);
+        });
+      });
+    }
+  }
+  class ProfileView {
+    constructor(src) { this.src = src; }
+    zOrder() { return 'bottom'; }
+    renderer() { return new ProfileRenderer(this.src); }
+  }
+  class ProfilePrimitive {
+    constructor(rows) { this.rows = rows; this.max = Math.max(1e-9, ...rows.map((r) => Math.abs(r.v))); this.series = null; }
+    attached(p) { this.series = p.series; }
+    detached() { this.series = null; }
+    updateAllViews() {}
+    paneViews() { return [new ProfileView(this)]; }
+  }
+  try {
+    if (P.profile && P.profile.length) candles.attachPrimitive(new ProfilePrimitive(P.profile));
+  } catch (e) { console.warn('profile primitive failed', e); }
+
+  const fmtVol = (v) => {
+    const a = Math.abs(v), sg = v < 0 ? '-' : '';
+    if (a >= 1e6) return sg + (a / 1e6).toFixed(2) + 'M';
+    if (a >= 1e3) return sg + (a / 1e3).toFixed(1) + 'K';
+    return sg + a.toFixed(0);
+  };
+  // ---- CVD (панель 1, окремі лінії на кожну сесію, тому скидання видно)
+  let lastCvd = null;
+  if (P.cvd && P.cvd.length) {
+    P.cvd.forEach((data, i) => {
+      const isLast = i === P.cvd.length - 1;
+      const l = chart.addSeries(LW.LineSeries, {
+        color: isLast ? '#6aa9ff' : 'rgba(106,169,255,0.4)', lineWidth: isLast ? 2 : 1,
+        priceFormat: { type: 'custom', minMove: 1, formatter: fmtVol }, lastValueVisible: isLast, priceLineVisible: false,
+        crosshairMarkerVisible: false, title: isLast ? 'CVD' : '',
+      }, 1);
+      l.setData(data);
+      if (isLast) lastCvd = l;
+    });
+    if (lastCvd) lastCvd.createPriceLine({ price: 0, color: '#33415c', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
+    try {
+      const panes = chart.panes();
+      if (panes[1]) { panes[0].setStretchFactor(3.4); panes[1].setStretchFactor(1); }
+    } catch (e) { console.warn('pane sizing failed', e); }
+  }
+
+  // ---- Легенда
+  const legend = document.getElementById('legend');
+  const fmt = (v) => v.toFixed(2);
+  function renderLegend(bar) {
+    if (!bar) { legend.innerHTML = `<span class="t">${P.title}</span>`; return; }
+    const up = bar.close >= bar.open, cls = up ? 'up' : 'dn';
+    const chg = bar.close - bar.open;
+    legend.innerHTML = `<span class="t">${P.title}</span>`
+      + `O <b>${fmt(bar.open)}</b> H <b>${fmt(bar.high)}</b> L <b>${fmt(bar.low)}</b> C <b>${fmt(bar.close)}</b> `
+      + `<span class="${cls}">${chg >= 0 ? '+' : ''}${fmt(chg)}</span>`;
+  }
+  const lastBar = P.candles[P.candles.length - 1];
+  renderLegend(lastBar);
+  chart.subscribeCrosshairMove((param) => {
+    const bar = param && param.seriesData ? param.seriesData.get(candles) : null;
+    renderLegend(bar || lastBar);
+  });
+
+  // ---- Масштаб: зберігаємо відносно останньої свічки, щоб автооновлення не скидало перегляд
+  const KEY = 'vart:view:' + P.key;
+  const lastIdx = P.candles.length - 1;
+  const defRange = () => ({ from: Math.max(0, lastIdx - P.default_bars), to: lastIdx + 14 });
+  let range = defRange();
+  try {
+    const sv = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (sv && isFinite(sv.f) && isFinite(sv.t) && sv.t - sv.f > 8 && sv.t - sv.f < 4000) range = { from: lastIdx + sv.f, to: lastIdx + sv.t };
+  } catch (e) {}
+  chart.timeScale().setVisibleLogicalRange(range);
+  chart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
+    if (!r) return;
+    try { localStorage.setItem(KEY, JSON.stringify({ f: r.from - lastIdx, t: r.to - lastIdx })); } catch (e) {}
+  });
+  document.getElementById('btn-fit').onclick = () => chart.timeScale().scrollToRealTime();
+  document.getElementById('btn-reset').onclick = () => {
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    chart.timeScale().setVisibleLogicalRange(defRange());
+    chart.priceScale('right').applyOptions({ autoScale: true });
+  };
+  window.__chart = chart; window.__ready = true;
+})();
+</script>
+</body>
+</html>
