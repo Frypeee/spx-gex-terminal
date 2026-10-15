@@ -169,12 +169,13 @@ with c5:
 with c6:
     if st.button("Оновити", use_container_width=True, help="Скинути кеш і завантажити свіжі дані"):
         CACHE.clear()
-st.markdown('<div class="theme-sw"><span class="muted" style="align-self:center">Тема:</span>'
-            '<a href="?embed_options=light_theme" target="_self">☀ Світла</a>'
-            '<a href="?embed_options=dark_theme" target="_self">☾ Темна</a></div>', unsafe_allow_html=True)
 with st.expander("Вікна й макет"):
+    st.markdown('<div class="theme-sw"><span class="muted" style="align-self:center">Тема:</span>'
+                '<a href="?embed_options=light_theme" target="_self">☀ Світла</a>'
+                '<a href="?embed_options=dark_theme" target="_self">☾ Темна</a></div>', unsafe_allow_html=True)
     tabs_on = st.pills("Показувати вкладки", TAB_OPTIONS, selection_mode="multi", default=TAB_OPTIONS, key="tabs_on") or []
-    show_levels_panel = st.toggle("Панель рівнів праворуч від графіка", True, key="lv_panel")
+    show_levels_panel = st.toggle("Панель рівнів праворуч від графіка", False, key="lv_panel",
+                                  help="Той самий список є на вкладці «Рівні й сигнал».")
     chart_h = st.slider("Висота графіка, px", 480, 1000, 760, 20, key="chart_h")
     detach = st.selectbox("Відкріпити вкладку в окреме вікно", ["—"] + TAB_OPTIONS, key="detach_sel",
                           help="Відкриє вибрану вкладку у спливному вікні поверх сторінки.")
@@ -322,7 +323,7 @@ def deliver(events, cfg, inst_key, now_et):
 # ------------------------------------------------------------------ головна панель
 @st.fragment(run_every=REFRESH)
 def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, basis_override: float, alert_cfg: dict, theme: str,
-             tabs_on: tuple = tuple(TAB_OPTIONS), show_levels_panel: bool = True, chart_h: int = 760, detach: str = "—"):
+             tabs_on: tuple = tuple(TAB_OPTIONS), show_levels_panel: bool = False, chart_h: int = 760, detach: str = "—"):
     inst = C.INSTRUMENTS[inst_key]
     now_et = datetime.now(C.ET)
     now_utc = now_et.astimezone(timezone.utc)

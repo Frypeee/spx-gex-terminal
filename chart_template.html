@@ -8,9 +8,12 @@
   :root { --bg:#0a0f18; --fg:#d8e0ee; --muted:#8b97b1; --line:#1e2a3f; --btnbg:#101827; --btnfg:#aab6cf; --btnbd:#263451; }
   html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
   #wrap { position: relative; height: 100%; width: 100%; }
-  #chart { position: absolute; inset: 0; }
+  #wrap { --top: 0px; --pw: 0px; }
+  #chart { position: absolute; left: 0; top: var(--top); bottom: 0; right: var(--pw); }
+  #side { position: absolute; top: var(--top); right: 0; bottom: 0; width: var(--pw); border-left: 1px solid var(--line); display: none; }
+  #side canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
   #legend {
-    position: absolute; left: 10px; top: 8px; z-index: 5; pointer-events: none;
+    position: absolute; left: 10px; top: calc(var(--top) + 8px); z-index: 5; pointer-events: none;
     font: 500 12px/1.5 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; color: var(--muted);
     text-shadow: 0 0 4px var(--bg), 0 0 8px var(--bg);
   }
@@ -28,7 +31,8 @@
   }
   #tools button:hover { border-color: #3b82f6; color: var(--fg); }
   #tools button:focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
-  #gx { position: absolute; right: 70px; top: 6px; z-index: 7; display: none; gap: 6px; align-items: center; }
+  #gx { position: absolute; right: 8px; left: 8px; top: 0; height: 30px; z-index: 7; display: none; gap: 6px; align-items: center; justify-content: flex-end; }
+  #gx .ttl { margin-right: auto; color: var(--muted); font: 600 11px 'IBM Plex Sans', system-ui, sans-serif; letter-spacing: .04em; }
   #gx .seg { display: inline-flex; border: 1px solid var(--btnbd); border-radius: 5px; overflow: hidden; }
   #gx button, #gx select { background: var(--btnbg); color: var(--btnfg); border: 0; font: 500 11px 'IBM Plex Sans', system-ui, sans-serif; padding: 5px 10px; cursor: pointer; }
   #gx .seg button + button { border-left: 1px solid var(--btnbd); }
@@ -42,10 +46,11 @@
 <body>
 <div id="wrap">
   <div id="chart"></div>
+  <div id="side"><canvas id="gxc"></canvas></div>
   <div id="legend"></div>
   <div id="tools"><button id="btn-fit" title="Повернутися до поточного часу">До поточного</button><button id="btn-reset" title="Скинути масштаб">Скинути</button>
     <label id="ib-ctl" title="Показати/сховати зону Initial Balance і змінити колір" style="display:none"><input type="checkbox" id="ib-on"> IB <input type="color" id="ib-col" value="#4c8dff"></label></div>
-  <div id="gx"><div class="seg"><button id="gx-all" class="on">Усі серії</button><button id="gx-0">0DTE</button></div>
+  <div id="gx"><span class="ttl" id="gx-t"></span><div class="seg"><button id="gx-all" class="on">Усі серії</button><button id="gx-0">0DTE</button></div>
     <button id="gx-sum" class="solo">Σ крива</button>
     <select id="gx-m"><option value="net">Net GEX</option><option value="call">Call GEX</option><option value="put">Put GEX</option><option value="abs">Call + Put</option></select></div>
   <div id="err"></div>
@@ -171,7 +176,7 @@
     if (P.ib) { try { ibPrim = new IbPrimitive(P.ib); candles.attachPrimitive(ibPrim); } catch (e) { console.warn('ib primitive failed', e); } }
   }
 
-  // ---- GEX за страйками: стовпчики від правого краю; перемикачі: усі серії / 0DTE, Σ-крива, метрика
+  // ---- GEX за страйками: окремий віджет праворуч від графіка, вирівняний по тій самій ціновій шкалі
   const GXK = 'ashelper:gx';
   const gxs = { scope: 'all', sum: false, m: 'net' };
   try { Object.assign(gxs, JSON.parse(localStorage.getItem(GXK) || '{}')); } catch (e) {}
@@ -181,80 +186,81 @@
   };
   const fmtB = (v) => { const a = Math.abs(v), sg = v < 0 ? '−' : '+';
     return a >= 1 ? sg + a.toFixed(2) + 'B' : a >= 0.001 ? sg + (a * 1000).toFixed(a >= 0.1 ? 0 : 1) + 'M' : sg + (a * 1e6).toFixed(0) + 'k'; };
-  const gxTitle = () => ({ net: 'NET GEX', call: 'CALL GEX', put: 'PUT GEX', abs: 'CALL + PUT GEX' }[gxs.m]) + (gxs.scope === '0' ? ' · 0DTE' : ' · УСІ СЕРІЇ');
-  class ProfileRenderer {
-    constructor(src) { this.s = src; }
-    draw(target) {
-      const s = this.s;
-      if (!s.series || !s.rows.length) return;
-      target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
-        const W = mediaSize.width, maxW = Math.min(210, W * 0.21);
-        const vals = s.rows.map(gxVal);
-        const mx = Math.max(1e-9, ...vals.map((v) => Math.abs(v)));
-        const ys = s.rows.map((r) => s.series.priceToCoordinate(r.price));
-        let step = 6;
-        for (let i = 1; i < ys.length; i++) {
-          if (ys[i] != null && ys[i - 1] != null) { step = Math.abs(ys[i] - ys[i - 1]); break; }
-        }
-        const h = Math.max(2, Math.min(step - 1, 14));
-        const labelled = step >= 9 ? null : new Set([...vals.keys()].sort((a, b) => Math.abs(vals[b]) - Math.abs(vals[a])).slice(0, 8));
-        ctx.font = "500 10px 'IBM Plex Mono', monospace";
-        s.rows.forEach((r, i) => {
-          const y = ys[i], v = vals[i];
-          if (y == null || !isFinite(v)) return;
-          const w = Math.max(1, Math.abs(v) / mx * maxW);
-          ctx.fillStyle = v >= 0 ? 'rgba(47,212,160,0.5)' : 'rgba(242,86,107,0.5)';
-          ctx.fillRect(W - w, y - h / 2, w, h);
-          if (h >= 7 && (labelled === null || labelled.has(i)) && Math.abs(v) / mx > 0.04) {
-            ctx.fillStyle = T.fg; ctx.textAlign = 'right';
-            ctx.fillText(fmtB(v), W - w - 4, y + 3.5);
-          }
-        });
-        if (gxs.sum) {   // Σ-крива: накопичена гамма знизу вгору (нуль = HVL)
-          let acc = 0; const pts = [];
-          const order = s.rows.map((r, i) => i).filter((i) => ys[i] != null).sort((a, b) => ys[b] - ys[a]);
-          order.forEach((i) => { acc += vals[i]; pts.push([ys[i], acc]); });
-          const m2 = Math.max(1e-9, ...pts.map((p) => Math.abs(p[1])));
-          const x0 = W - maxW * 0.5, amp = maxW * 0.5;
-          ctx.beginPath(); pts.forEach((p, k) => { const x = x0 + p[1] / m2 * amp; k ? ctx.lineTo(x, p[0]) : ctx.moveTo(x, p[0]); });
-          ctx.strokeStyle = '#f5a524'; ctx.lineWidth = 1.6; ctx.stroke();
-          ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x0, mediaSize.height); ctx.strokeStyle = 'rgba(245,165,36,0.35)'; ctx.lineWidth = 1; ctx.stroke(); ctx.setLineDash([]);
-        }
-        ctx.textAlign = 'right'; ctx.fillStyle = T.muted; ctx.font = "600 10px 'IBM Plex Sans', sans-serif";
-        ctx.fillText(gxTitle() + ' ($/1%)' + (gxs.sum ? ' · Σ' : ''), W - 6, 14);
-      });
-    }
-  }
-  class ProfileView {
-    constructor(src) { this.src = src; }
-    zOrder() { return 'bottom'; }
-    renderer() { return new ProfileRenderer(this.src); }
-  }
-  class ProfilePrimitive {
-    constructor(rows) { this.rows = rows; this.series = null; this.req = null; }
-    attached(p) { this.series = p.series; this.req = p.requestUpdate; }
-    detached() { this.series = null; }
-    updateAllViews() {}
-    paneViews() { return [new ProfileView(this)]; }
-    refresh() { if (this.req) this.req(); }
-  }
+  const gxTitle = () => ({ net: 'NET GEX', call: 'CALL GEX', put: 'PUT GEX', abs: 'CALL + PUT GEX' }[gxs.m]) + (gxs.scope === '0' ? ' · 0DTE' : ' · УСІ СЕРІЇ') + ' · $/1%';
   try {
     if (P.profile && P.profile.length) {
-      const prim = new ProfilePrimitive(P.profile); candles.attachPrimitive(prim);
-      const box = document.getElementById('gx'); box.style.display = 'flex';
-      const bAll = document.getElementById('gx-all'), b0 = document.getElementById('gx-0'),
-            bS = document.getElementById('gx-sum'), sel = document.getElementById('gx-m');
-      const sync = () => {
-        bAll.classList.toggle('on', gxs.scope === 'all'); b0.classList.toggle('on', gxs.scope === '0');
-        bS.classList.toggle('on', gxs.sum); sel.value = gxs.m;
-        try { localStorage.setItem(GXK, JSON.stringify(gxs)); } catch (e) {}
-        prim.refresh();
+      const wrap = document.getElementById('wrap'), side = document.getElementById('side'), cv = document.getElementById('gxc');
+      const box = document.getElementById('gx'), ttl = document.getElementById('gx-t');
+      const PW = Math.round(Math.max(170, Math.min(250, window.innerWidth * 0.2)));
+      wrap.style.setProperty('--top', '30px'); wrap.style.setProperty('--pw', PW + 'px');
+      side.style.display = 'block'; box.style.display = 'flex';
+      const rows = P.profile;
+      let lastSig = '';
+      const draw = (force) => {
+        const w = cv.clientWidth, h = cv.clientHeight; if (!w || !h) return;
+        let ph = h; try { ph = chart.panes()[0].getHeight(); } catch (e) {}
+        const ys = rows.map((r) => candles.priceToCoordinate(r.price));
+        const sig = [w, h, ph, ys[0], ys[ys.length - 1], gxs.scope, gxs.sum, gxs.m].join('|');
+        if (!force && sig === lastSig) return;
+        lastSig = sig;
+        const dpr = window.devicePixelRatio || 1;
+        if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+        const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h); ctx.fillStyle = T.bg; ctx.fillRect(0, 0, w, h);
+        ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w, ph); ctx.clip();
+        const vals = rows.map(gxVal);
+        const mx = Math.max(1e-9, ...vals.map((v) => Math.abs(v)));
+        let step = 8;
+        for (let i = 1; i < ys.length; i++) { if (ys[i] != null && ys[i - 1] != null) { step = Math.abs(ys[i] - ys[i - 1]); break; } }
+        const bh = Math.max(2, Math.min(step - 1.5, 15));
+        const hasNeg = vals.some((v) => v < 0), hasPos = vals.some((v) => v > 0);
+        const x0 = hasNeg && hasPos ? Math.round(w * 0.5) : hasNeg ? w - 6 : 6;   // нульова вісь
+        const span = (hasNeg && hasPos ? w * 0.5 : w) - 54;
+        const top = new Set([...vals.keys()].sort((a, b) => Math.abs(vals[b]) - Math.abs(vals[a])).slice(0, 12));
+        ctx.font = "500 10px 'IBM Plex Mono', monospace";
+        // поточна ціна
+        const last = P.candles[P.candles.length - 1], yl = candles.priceToCoordinate(last.close);
+        if (yl != null) { ctx.strokeStyle = 'rgba(120,140,180,0.45)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(0, yl); ctx.lineTo(w, yl); ctx.stroke(); ctx.setLineDash([]); }
+        rows.forEach((r, i) => {
+          const y = ys[i], v = vals[i];
+          if (y == null || y < -10 || y > ph + 10 || !isFinite(v) || v === 0) return;
+          const len = Math.max(1, Math.abs(v) / mx * span);
+          const pos = v >= 0;
+          const xs = pos ? x0 : x0 - len;
+          ctx.fillStyle = pos ? 'rgba(38,166,154,0.85)' : 'rgba(239,83,80,0.85)';
+          ctx.fillRect(xs, y - bh / 2, len, bh);
+          if (bh >= 7 && (step >= 10 || top.has(i)) && Math.abs(v) / mx > 0.02) {
+            ctx.fillStyle = T.muted; ctx.textAlign = pos ? 'left' : 'right';
+            ctx.fillText(fmtB(v), pos ? x0 + len + 4 : x0 - len - 4, y + 3.5);
+          }
+        });
+        if (hasNeg && hasPos) { ctx.strokeStyle = T.line; ctx.beginPath(); ctx.moveTo(x0 + 0.5, 0); ctx.lineTo(x0 + 0.5, ph); ctx.stroke(); }
+        if (gxs.sum) {   // Σ-крива: накопичена гамма знизу вгору; перетин нульової осі = HVL
+          let acc = 0; const pts = [];
+          rows.map((r, i) => i).filter((i) => ys[i] != null).sort((a, b) => ys[b] - ys[a]).forEach((i) => { acc += vals[i]; pts.push([ys[i], acc]); });
+          const m2 = Math.max(1e-9, ...pts.map((q) => Math.abs(q[1])));
+          const amp = hasNeg && hasPos ? w * 0.5 - 8 : w - 14;
+          ctx.beginPath(); pts.forEach((q, k) => { const x = x0 + q[1] / m2 * amp; k ? ctx.lineTo(x, q[0]) : ctx.moveTo(x, q[0]); });
+          ctx.strokeStyle = '#f5a524'; ctx.lineWidth = 1.6; ctx.stroke(); ctx.lineWidth = 1;
+        }
+        ctx.restore();
       };
-      bAll.onclick = () => { gxs.scope = 'all'; sync(); }; b0.onclick = () => { gxs.scope = '0'; sync(); };
-      bS.onclick = () => { gxs.sum = !gxs.sum; sync(); }; sel.onchange = () => { gxs.m = sel.value; sync(); };
-      sync();
+      const sync = () => {
+        document.getElementById('gx-all').classList.toggle('on', gxs.scope === 'all');
+        document.getElementById('gx-0').classList.toggle('on', gxs.scope === '0');
+        document.getElementById('gx-sum').classList.toggle('on', gxs.sum);
+        document.getElementById('gx-m').value = gxs.m; ttl.textContent = gxTitle();
+        try { localStorage.setItem(GXK, JSON.stringify(gxs)); } catch (e) {}
+        draw(true);
+      };
+      document.getElementById('gx-all').onclick = () => { gxs.scope = 'all'; sync(); };
+      document.getElementById('gx-0').onclick = () => { gxs.scope = '0'; sync(); };
+      document.getElementById('gx-sum').onclick = () => { gxs.sum = !gxs.sum; sync(); };
+      document.getElementById('gx-m').onchange = (e) => { gxs.m = e.target.value; sync(); };
+      const loop = () => { try { draw(false); } catch (e) {} requestAnimationFrame(loop); };
+      sync(); requestAnimationFrame(loop);
     }
-  } catch (e) { console.warn('profile primitive failed', e); }
+  } catch (e) { console.warn('gex widget failed', e); }
 
   const fmtVol = (v) => {
     const a = Math.abs(v), sg = v < 0 ? '-' : '';
