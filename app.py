@@ -455,7 +455,15 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
             profile = []
             if "Профіль" in layers and gex is not None and basis is not None:
                 prof_src = gex.mq_profile if len(gex.mq_profile) else gex.profile
-                profile = [{"price": G.shift_level(r.strike, basis, inst.tick), "v": float(r.net)} for r in prof_src.itertuples()]
+                z0 = {float(r.strike): r for r in gex.mq_profile_0.itertuples()} if len(gex.mq_profile_0) else {}
+                profile = []
+                for r in prof_src.itertuples():
+                    z = z0.get(float(r.strike))
+                    profile.append({"price": G.shift_level(r.strike, basis, inst.tick), "v": float(r.net),
+                                    "c": float(getattr(r, "call", 0.0)), "p": float(getattr(r, "put", 0.0)),
+                                    "z": float(z.net) if z is not None else 0.0,
+                                    "zc": float(z.call) if z is not None else 0.0,
+                                    "zp": float(z.put) if z is not None else 0.0})
             ib = CH.ib_box(bars, key.td, key.get("IBH"), key.get("IBL"), tf)
             html = CH.build_chart_html(
                 title=f"{inst.key}1!  {tf}", key=f"{inst.key}_{tf}", tf=tf, bars=bars, levels=spec, profile=profile,

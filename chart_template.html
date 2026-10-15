@@ -28,6 +28,13 @@
   }
   #tools button:hover { border-color: #3b82f6; color: var(--fg); }
   #tools button:focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
+  #gx { position: absolute; right: 70px; top: 6px; z-index: 7; display: none; gap: 6px; align-items: center; }
+  #gx .seg { display: inline-flex; border: 1px solid var(--btnbd); border-radius: 5px; overflow: hidden; }
+  #gx button, #gx select { background: var(--btnbg); color: var(--btnfg); border: 0; font: 500 11px 'IBM Plex Sans', system-ui, sans-serif; padding: 5px 10px; cursor: pointer; }
+  #gx .seg button + button { border-left: 1px solid var(--btnbd); }
+  #gx button.on { background: #1d3a6b; color: #fff; }
+  #gx .solo { border: 1px solid var(--btnbd); border-radius: 5px; }
+  #gx select { border: 1px solid var(--btnbd); border-radius: 5px; padding: 5px 8px; }
   #err { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
          color: #ef9a9a; font: 500 14px 'IBM Plex Sans', sans-serif; text-align: center; padding: 24px; }
 </style>
@@ -38,6 +45,9 @@
   <div id="legend"></div>
   <div id="tools"><button id="btn-fit" title="Повернутися до поточного часу">До поточного</button><button id="btn-reset" title="Скинути масштаб">Скинути</button>
     <label id="ib-ctl" title="Показати/сховати зону Initial Balance і змінити колір" style="display:none"><input type="checkbox" id="ib-on"> IB <input type="color" id="ib-col" value="#4c8dff"></label></div>
+  <div id="gx"><div class="seg"><button id="gx-all" class="on">Усі серії</button><button id="gx-0">0DTE</button></div>
+    <button id="gx-sum" class="solo">Σ крива</button>
+    <select id="gx-m"><option value="net">Net GEX</option><option value="call">Call GEX</option><option value="put">Put GEX</option><option value="abs">Call + Put</option></select></div>
   <div id="err"></div>
 </div>
 <script>__LIB__</script>
@@ -161,35 +171,57 @@
     if (P.ib) { try { ibPrim = new IbPrimitive(P.ib); candles.attachPrimitive(ibPrim); } catch (e) { console.warn('ib primitive failed', e); } }
   }
 
-  // ---- Net GEX by strike: горизонтальні стовпчики від правого краю, підписи страйків
+  // ---- GEX за страйками: стовпчики від правого краю; перемикачі: усі серії / 0DTE, Σ-крива, метрика
+  const GXK = 'ashelper:gx';
+  const gxs = { scope: 'all', sum: false, m: 'net' };
+  try { Object.assign(gxs, JSON.parse(localStorage.getItem(GXK) || '{}')); } catch (e) {}
+  const gxVal = (r) => {
+    const z = gxs.scope === '0', c = z ? r.zc : r.c, p = z ? r.zp : r.p, n = z ? r.z : r.v;
+    return gxs.m === 'call' ? c : gxs.m === 'put' ? -p : gxs.m === 'abs' ? c + p : n;
+  };
+  const fmtB = (v) => { const a = Math.abs(v), sg = v < 0 ? '−' : '+';
+    return a >= 1 ? sg + a.toFixed(2) + 'B' : a >= 0.001 ? sg + (a * 1000).toFixed(a >= 0.1 ? 0 : 1) + 'M' : sg + (a * 1e6).toFixed(0) + 'k'; };
+  const gxTitle = () => ({ net: 'NET GEX', call: 'CALL GEX', put: 'PUT GEX', abs: 'CALL + PUT GEX' }[gxs.m]) + (gxs.scope === '0' ? ' · 0DTE' : ' · УСІ СЕРІЇ');
   class ProfileRenderer {
     constructor(src) { this.s = src; }
     draw(target) {
       const s = this.s;
       if (!s.series || !s.rows.length) return;
       target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
-        const W = mediaSize.width, maxW = Math.min(190, W * 0.19);
+        const W = mediaSize.width, maxW = Math.min(210, W * 0.21);
+        const vals = s.rows.map(gxVal);
+        const mx = Math.max(1e-9, ...vals.map((v) => Math.abs(v)));
         const ys = s.rows.map((r) => s.series.priceToCoordinate(r.price));
         let step = 6;
         for (let i = 1; i < ys.length; i++) {
           if (ys[i] != null && ys[i - 1] != null) { step = Math.abs(ys[i] - ys[i - 1]); break; }
         }
         const h = Math.max(2, Math.min(step - 1, 14));
-        const top = [...s.rows].sort((a, b) => Math.abs(b.v) - Math.abs(a.v)).slice(0, 6).map((r) => r.price);
+        const labelled = step >= 9 ? null : new Set([...vals.keys()].sort((a, b) => Math.abs(vals[b]) - Math.abs(vals[a])).slice(0, 8));
         ctx.font = "500 10px 'IBM Plex Mono', monospace";
         s.rows.forEach((r, i) => {
-          const y = ys[i];
-          if (y == null) return;
-          const w = Math.max(1, Math.abs(r.v) / s.max * maxW);
-          ctx.fillStyle = r.v >= 0 ? 'rgba(47,212,160,0.45)' : 'rgba(242,86,107,0.45)';
+          const y = ys[i], v = vals[i];
+          if (y == null || !isFinite(v)) return;
+          const w = Math.max(1, Math.abs(v) / mx * maxW);
+          ctx.fillStyle = v >= 0 ? 'rgba(47,212,160,0.5)' : 'rgba(242,86,107,0.5)';
           ctx.fillRect(W - w, y - h / 2, w, h);
-          if (h >= 7 && top.includes(r.price)) {
+          if (h >= 7 && (labelled === null || labelled.has(i)) && Math.abs(v) / mx > 0.04) {
             ctx.fillStyle = T.fg; ctx.textAlign = 'right';
-            ctx.fillText((r.v >= 0 ? '+' : '') + r.v.toFixed(2) + 'B', W - w - 4, y + 3.5);
+            ctx.fillText(fmtB(v), W - w - 4, y + 3.5);
           }
         });
+        if (gxs.sum) {   // Σ-крива: накопичена гамма знизу вгору (нуль = HVL)
+          let acc = 0; const pts = [];
+          const order = s.rows.map((r, i) => i).filter((i) => ys[i] != null).sort((a, b) => ys[b] - ys[a]);
+          order.forEach((i) => { acc += vals[i]; pts.push([ys[i], acc]); });
+          const m2 = Math.max(1e-9, ...pts.map((p) => Math.abs(p[1])));
+          const x0 = W - maxW * 0.5, amp = maxW * 0.5;
+          ctx.beginPath(); pts.forEach((p, k) => { const x = x0 + p[1] / m2 * amp; k ? ctx.lineTo(x, p[0]) : ctx.moveTo(x, p[0]); });
+          ctx.strokeStyle = '#f5a524'; ctx.lineWidth = 1.6; ctx.stroke();
+          ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x0, mediaSize.height); ctx.strokeStyle = 'rgba(245,165,36,0.35)'; ctx.lineWidth = 1; ctx.stroke(); ctx.setLineDash([]);
+        }
         ctx.textAlign = 'right'; ctx.fillStyle = T.muted; ctx.font = "600 10px 'IBM Plex Sans', sans-serif";
-        ctx.fillText('NET GEX BY STRIKE ($B/1%)', W - 6, 14);
+        ctx.fillText(gxTitle() + ' ($/1%)' + (gxs.sum ? ' · Σ' : ''), W - 6, 14);
       });
     }
   }
@@ -199,14 +231,29 @@
     renderer() { return new ProfileRenderer(this.src); }
   }
   class ProfilePrimitive {
-    constructor(rows) { this.rows = rows; this.max = Math.max(1e-9, ...rows.map((r) => Math.abs(r.v))); this.series = null; }
-    attached(p) { this.series = p.series; }
+    constructor(rows) { this.rows = rows; this.series = null; this.req = null; }
+    attached(p) { this.series = p.series; this.req = p.requestUpdate; }
     detached() { this.series = null; }
     updateAllViews() {}
     paneViews() { return [new ProfileView(this)]; }
+    refresh() { if (this.req) this.req(); }
   }
   try {
-    if (P.profile && P.profile.length) candles.attachPrimitive(new ProfilePrimitive(P.profile));
+    if (P.profile && P.profile.length) {
+      const prim = new ProfilePrimitive(P.profile); candles.attachPrimitive(prim);
+      const box = document.getElementById('gx'); box.style.display = 'flex';
+      const bAll = document.getElementById('gx-all'), b0 = document.getElementById('gx-0'),
+            bS = document.getElementById('gx-sum'), sel = document.getElementById('gx-m');
+      const sync = () => {
+        bAll.classList.toggle('on', gxs.scope === 'all'); b0.classList.toggle('on', gxs.scope === '0');
+        bS.classList.toggle('on', gxs.sum); sel.value = gxs.m;
+        try { localStorage.setItem(GXK, JSON.stringify(gxs)); } catch (e) {}
+        prim.refresh();
+      };
+      bAll.onclick = () => { gxs.scope = 'all'; sync(); }; b0.onclick = () => { gxs.scope = '0'; sync(); };
+      bS.onclick = () => { gxs.sum = !gxs.sum; sync(); }; sel.onchange = () => { gxs.m = sel.value; sync(); };
+      sync();
+    }
   } catch (e) { console.warn('profile primitive failed', e); }
 
   const fmtVol = (v) => {

@@ -102,6 +102,7 @@ class GexResult:
     notes: list[str] = field(default_factory=list)
     mq: dict = field(default_factory=dict)            # рівні у стилі MenthorQ (ціни індексу): назва -> ціна
     mq_profile: pd.DataFrame = field(default_factory=pd.DataFrame)  # профіль усіх експірацій для правої панелі
+    mq_profile_0: pd.DataFrame = field(default_factory=pd.DataFrame)  # те саме лише для 0DTE
     summary: dict = field(default_factory=dict)       # дані для вкладки «Підсумок»
 
     @property
@@ -351,6 +352,7 @@ def compute_gex(df: pd.DataFrame, spot: float, now_et: datetime, scope: str = "0
     mq = menthorq_levels(tab_all, tab_0, spot, em)
     wv = spot * C.PROFILE_WINDOW
     mq_prof = tab_all[tab_all["strike"].between(spot - wv, spot + wv)].reset_index(drop=True)
+    mq_prof0 = tab_0[tab_0["strike"].between(spot - wv, spot + wv)].reset_index(drop=True)
     # Підсумок: GEX за терміном до експірації, співвідношення пут/кол за OI, нахил (skew)
     by_dte = {}
     for label, lo, hi in (("0DTE", 0, 0), ("1-7D", 1, 7), ("8-30D", 8, 30), ("31D+", 31, 10 ** 6)):
@@ -380,7 +382,7 @@ def compute_gex(df: pd.DataFrame, spot: float, now_et: datetime, scope: str = "0
         net_total_b=float(gex_at_spot), call_wall=call_wall, put_wall=put_wall, flip=flip,
         max_pain=pain, pin=pin, king=king, zero_call_wall=z_call, zero_put_wall=z_put,
         em_1d=em, atm_iv=iv_atm, profile=prof_view, notes=notes,
-        mq=mq, mq_profile=mq_prof, summary=summary,
+        mq=mq, mq_profile=mq_prof, mq_profile_0=mq_prof0, summary=summary,
     )
 
 
