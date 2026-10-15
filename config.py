@@ -28,11 +28,12 @@ class Instrument:
     etf: str         # ETF-аналог
     tick: float
     tpo_bin: float = 1.0   # крок цінового рівня TPO-профілю
+    cfd: str = ""          # інструмент OANDA (CFD, реальний час)
 
 
 INSTRUMENTS: dict[str, Instrument] = {
-    "ES": Instrument("ES", "ES1!  S&P 500", "ES=F", "^GSPC", "_SPX", "SPY", 0.25, 1.0),
-    "NQ": Instrument("NQ", "NQ1!  Nasdaq-100", "NQ=F", "^NDX", "_NDX", "QQQ", 0.25, 5.0),
+    "ES": Instrument("ES", "ES1!  S&P 500", "ES=F", "^GSPC", "_SPX", "SPY", 0.25, 1.0, "SPX500_USD"),
+    "NQ": Instrument("NQ", "NQ1!  Nasdaq-100", "NQ=F", "^NDX", "_NDX", "QQQ", 0.25, 5.0, "NAS100_USD"),
 }
 
 # Колонки порівняльної панелі (як на референсі): назва, файл CBOE
@@ -57,6 +58,9 @@ PROFILE_WINDOW = 0.035           # ±3.5% від споту на графіку
 MAX_DAYS_ALL = 120
 
 SCOPES = {"0DTE": 0, "≤7D": 7, "ALL": MAX_DAYS_ALL}
+
+# OANDA (безкоштовний demo-токен дає CFD-котирування S&P 500 і Nasdaq-100 у реальному часі)
+OANDA_HOSTS = {"practice": "https://api-fxpractice.oanda.com", "live": "https://api-fxtrade.oanda.com"}
 
 # Новини, календар, макро
 NEWS_FEEDS = [
@@ -111,7 +115,8 @@ COL = {
     "pin": "#3ec6d6",
     "king": "#b48cff",
     "vwap": "#8fa3c8",
-    "key": "#c7d0e3",
+    "nym": "#ffa826",
+    "key": "#8190ae",
     "ib": "#e8a0ff",
     "on": "#7fb7ff",
 }

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime
 
 import pandas as pd
@@ -46,6 +47,60 @@ def futures_daily(sym: str) -> Fetched:
 
 def index_1m(sym: str) -> Fetched:
     return CACHE.get(f"{sym}:1m", 20, lambda: _history(sym, "1d", "1m"))
+
+
+# ---------------------------------------------------------------- OANDA (CFD, реальний час)
+def parse_oanda(raw: dict) -> pd.DataFrame:
+    """JSON свічок OANDA v20 (mid-ціни) -> DataFrame OHLCV з UTC-індексом. Обсяг = кількість тиків."""
+    rows = []
+    for c in (raw or {}).get("candles", []):
+        m = c.get("mid")
+        if not m:
+            continue
+        rows.append((pd.Timestamp(c["time"]), float(m["o"]), float(m["h"]), float(m["l"]), float(m["c"]), float(c.get("volume", 0))))
+    if not rows:
+        raise ValueError("OANDA не повернув свічок")
+    df = pd.DataFrame(rows, columns=["t", "Open", "High", "Low", "Close", "Volume"]).set_index("t")
+    df.index = pd.DatetimeIndex(df.index)
+    df.index = df.index.tz_localize("UTC") if df.index.tz is None else df.index.tz_convert("UTC")
+    return df[~df.index.duplicated(keep="last")].sort_index()
+
+
+def _oanda(instrument: str, gran: str, count: int, token: str, env: str = "practice") -> pd.DataFrame:
+    host = C.OANDA_HOSTS.get(env, C.OANDA_HOSTS["practice"])
+    params = {"granularity": gran, "count": count, "price": "M"}
+    if gran == "D":
+        params.update({"dailyAlignment": 17, "alignmentTimezone": "America/New_York"})
+    r = requests.get(f"{host}/v3/instruments/{instrument}/candles", params=params, timeout=(5, 15),
+                     headers={"Authorization": f"Bearer {token}", "Accept-Datetime-Format": "RFC3339"})
+    if r.status_code in (401, 403):
+        raise PermissionError(f"OANDA відхилив токен (HTTP {r.status_code})")
+    r.raise_for_status()
+    return parse_oanda(r.json())
+
+
+@dataclass
+class Feed:
+    f1: Fetched
+    f5: Fetched
+    fd: Fetched
+    source: str
+    realtime: bool
+    note: str = ""
+
+
+def price_feed(inst: C.Instrument, token: str | None = None, env: str = "practice") -> Feed:
+    """Джерело цін: OANDA CFD у реальному часі, якщо є токен; інакше Yahoo (ф'ючерс CME, затримка ~10 хв)."""
+    note = ""
+    if token and inst.cfd:
+        f1 = CACHE.get(f"oanda:{inst.cfd}:M1", 5, lambda: _oanda(inst.cfd, "M1", 5000, token, env))
+        if f1.ok:
+            f5 = CACHE.get(f"oanda:{inst.cfd}:M5", 20, lambda: _oanda(inst.cfd, "M5", 5000, token, env))
+            fd = CACHE.get(f"oanda:{inst.cfd}:D", 600, lambda: _oanda(inst.cfd, "D", 120, token, env))
+            return Feed(f1, f5, fd, f"OANDA {inst.cfd} (CFD, реальний час)", True)
+        note = f"OANDA недоступний ({f1.error}), використано Yahoo."
+    return Feed(futures_1m(inst.fut), futures_5m(inst.fut), futures_daily(inst.fut),
+                f"Yahoo {inst.fut} (CME, затримка ~10 хв за правилами біржі)", False, note)
 
 
 # ---------------------------------------------------------------- CBOE

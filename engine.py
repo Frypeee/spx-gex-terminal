@@ -135,16 +135,16 @@ def build_read(*, inst: C.Instrument, spot: float, basis: float | None, levels: 
         near = spot * 0.0025
         if regime_pos:
             if cw is not None and abs(cw - spot) <= near:
-                factors.append(("Gamma: біля call wall", -1.0, f"Позитивна гамма, спот біля call wall {fmt(cw)}: дилери продають у зростання."))
+                factors.append(("Гамма дилерів", -1.0, f"Позитивна гамма, спот біля call wall {fmt(cw)}: дилери продають у зростання."))
             elif pw is not None and abs(spot - pw) <= near:
-                factors.append(("Gamma: біля put wall", 1.0, f"Позитивна гамма, спот біля put wall {fmt(pw)}: дилери купують просадки."))
+                factors.append(("Гамма дилерів", 1.0, f"Позитивна гамма, спот біля put wall {fmt(pw)}: дилери купують просадки."))
             else:
-                factors.append(("Gamma: режим", 0.0, "Позитивна гамма: стискання діапазону, пробої частіше хибні."))
+                factors.append(("Гамма дилерів", 0.0, "Позитивна гамма: стискання діапазону, пробої частіше хибні."))
         else:
             side = 1.0 if (vwap is not None and spot > vwap) else -1.0 if vwap is not None else 0.0
-            factors.append(("Gamma: режим", side, "Негативна гамма: рух прискорюється в бік тренду."))
+            factors.append(("Гамма дилерів", side, "Негативна гамма: рух прискорюється в бік тренду."))
         if fl is not None:
-            factors.append(("Положення до flip", 0.5 if spot > fl else -0.5,
+            factors.append(("Ціна відносно flip", 0.5 if spot > fl else -0.5,
                             f"Спот {'вище' if spot > fl else 'нижче'} gamma flip {fmt(fl)}."))
     else:
         unavailable.append("GEX")
@@ -155,14 +155,14 @@ def build_read(*, inst: C.Instrument, spot: float, basis: float | None, levels: 
 
     # 3. VART Flow: відкриття відносно OVN, IB, sweep PDH/PDL (плейбук T·02-T·11)
     if flow is not None:
-        factors.append(("VART: сценарій", flow.score, f"{flow.scenario}. {flow.now}"[:220]))
+        factors.append(("Сценарій VART", flow.score, f"{flow.scenario}. {flow.now}"[:220]))
     else:
         unavailable.append("VART flow")
     ibh, ibl = levels.get("IBH"), levels.get("IBL")
 
     # 5. Order flow (оціночна CVD)
     cv = cvd_state(px1m, cvd1m)
-    factors.append(("CVD (оцінка)", cv["score"], cv["note"]))
+    factors.append(("Потік ордерів (CVD)", cv["score"], cv["note"]))
 
     # 6. Новини
     now_utc = now_et.astimezone(timezone.utc)
@@ -200,11 +200,14 @@ def build_read(*, inst: C.Instrument, spot: float, basis: float | None, levels: 
     if unavailable:
         alerts.append("Немає даних: " + ", ".join(unavailable) + ". Оцінка неповна.")
 
+    ranked = sorted((f for f in factors if abs(f[1]) >= 0.5), key=lambda f: -abs(f[1]))[:3]
+    why = [f"{f[0]}: {'за лонг' if f[1] > 0 else 'за шорт'}" for f in ranked]
+    plan["summary"] = _plan_summary(bias, plan)
     headline, paragraph = todays_read(inst, spot, gex, levels)
     return {
         "phase": phase, "phase_text": phase_text, "bias": bias, "score": score, "strength": strength,
         "factors": factors, "cvd": cv, "plan": plan, "alerts": alerts,
-        "headline": headline, "paragraph": paragraph,
+        "headline": headline, "paragraph": paragraph, "why": why,
     }
 
 
@@ -229,6 +232,22 @@ def _plan(bias: str, spot: float, ref: dict[str, float], tol: float) -> dict:
         pattern = ("Переваги немає. Працюємо від меж: rejection на нижній межі для лонгу, на верхній для шорту. "
                    "Або чекаємо прийняття за межею.")
     return {"level": lvl, "target": tgt, "invalid": inv, "pattern": pattern, "bias": bias}
+
+
+def _plan_summary(bias: str, plan: dict) -> str:
+    lvl, tgt, inv = plan["level"], plan["target"], plan["invalid"]
+    if bias == "WAIT":
+        if lvl and tgt:
+            return (f"Переваги немає. Діапазон {fmt(lvl[1])} ({lvl[0]}) – {fmt(tgt[1])} ({tgt[0]}). "
+                    "Чекаємо rejection на межі або acceptance за нею.")
+        return "Переваги немає. Чекаємо тест ключового рівня."
+    side = "Лонг" if bias == "LONG" else "Шорт"
+    parts = [f"{side}: чекаємо підхід до {fmt(lvl[1])} ({lvl[0]}) і rejection на 5m" if lvl else f"{side}: чекаємо rejection на 5m"]
+    if tgt:
+        parts.append(f"ціль {fmt(tgt[1])} ({tgt[0]})")
+    if inv:
+        parts.append(f"скасування: прийняття {'нижче' if bias == 'LONG' else 'вище'} {fmt(inv[1])} ({inv[0]})")
+    return "; ".join(parts) + "."
 
 
 def todays_read(inst: C.Instrument, spot: float, gex, levels: dict[str, float]) -> tuple[str, str]:

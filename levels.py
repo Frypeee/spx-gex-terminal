@@ -112,7 +112,8 @@ class KeyLevels:
         return self.values.get(k)
 
 
-def compute_key_levels(d5: pd.DataFrame, daily: pd.DataFrame | None, now_et: datetime, tpo_bin: float = 1.0) -> KeyLevels:
+def compute_key_levels(d5: pd.DataFrame, daily: pd.DataFrame | None, now_et: datetime, tpo_bin: float = 1.0,
+                       d1: pd.DataFrame | None = None) -> KeyLevels:
     """PDH/PDL (лише RTH), OVNH/OVNL (16:00 → 09:29 ET), IBH/IBL, VAH/VAL/POC учора, DO, NYM, PWH/PWL, PMH/PML, WO, MO.
 
     Визначення відповідають методичці VART (T·01, T·02): PDH/PDL це High/Low RTH-сесії попереднього дня.
@@ -168,9 +169,12 @@ def compute_key_levels(d5: pd.DataFrame, daily: pd.DataFrame | None, now_et: dat
         if dpoc is not None:
             v["dPOC"] = dpoc
 
-    nym = cur[(cur["tod"] >= 0) & (cur["tod"] < 5) & (cur.index.date == td0)]
-    if not nym.empty:
-        v["NYM"] = float(nym["Open"].iloc[0])
+    # NYM: ціна відкриття о 00:00 ET (перша свічка після півночі, допускаємо пропуски до 30 хв)
+    midnight = pd.Timestamp(datetime.combine(td0, dtime(0, 0))).tz_localize(C.ET)
+    src = d1 if d1 is not None and not d1.empty else d
+    after = src[(src.index >= midnight) & (src.index < midnight + pd.Timedelta(minutes=30))]
+    if not after.empty:
+        v["NYM"] = float(after["Open"].iloc[0])
 
     if daily is not None and not daily.empty:
         dd = daily.copy()

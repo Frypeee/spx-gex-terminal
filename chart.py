@@ -54,7 +54,8 @@ def _session_chunks(df: pd.DataFrame, ts: np.ndarray, cols: list[str], keep: int
 
 
 def build_chart_html(*, title: str, key: str, tf: str, bars: pd.DataFrame, levels: list[dict],
-                     profile: list[dict], sv: pd.DataFrame | None, show_vwap: bool, show_cvd: bool) -> str:
+                     profile: list[dict], sv: pd.DataFrame | None, show_vwap: bool, show_cvd: bool,
+                     theme: str = "dark") -> str:
     daily = tf == "1D"
     ts = to_ts(bars.index, daily=daily)
     candles = [
@@ -79,7 +80,7 @@ def build_chart_html(*, title: str, key: str, tf: str, bars: pd.DataFrame, level
             cvd = [ch["cvd"] for ch in _session_chunks(sv, sts, ["cvd"])]
 
     payload = {
-        "title": title, "key": key, "daily": daily, "candles": candles, "volume": volume,
+        "title": title, "key": key, "theme": theme, "daily": daily, "candles": candles, "volume": volume,
         "levels": levels, "profile": profile, "vwap": vwap, "cvd": cvd,
         "default_bars": DEFAULT_BARS.get(tf, 150), "bar_spacing": BAR_SPACING.get(tf, 7),
     }

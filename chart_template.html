@@ -5,24 +5,25 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
-  html, body { margin: 0; height: 100%; background: #0a0f18; overflow: hidden; }
+  :root { --bg:#0a0f18; --fg:#d8e0ee; --muted:#8b97b1; --line:#1e2a3f; --btnbg:#101827; --btnfg:#aab6cf; --btnbd:#263451; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
   #wrap { position: relative; height: 100%; width: 100%; }
   #chart { position: absolute; inset: 0; }
   #legend {
     position: absolute; left: 10px; top: 8px; z-index: 5; pointer-events: none;
-    font: 500 12px/1.5 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; color: #8b97b1;
-    text-shadow: 0 0 4px #0a0f18, 0 0 8px #0a0f18;
+    font: 500 12px/1.5 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; color: var(--muted);
+    text-shadow: 0 0 4px var(--bg), 0 0 8px var(--bg);
   }
-  #legend b { color: #d8e0ee; font-weight: 500; }
-  #legend .t { font: 600 13px 'IBM Plex Sans', system-ui, sans-serif; color: #d8e0ee; margin-right: 8px; }
+  #legend b { color: var(--fg); font-weight: 500; }
+  #legend .t { font: 600 13px 'IBM Plex Sans', system-ui, sans-serif; color: var(--fg); margin-right: 8px; }
   #legend .up { color: #26a69a; } #legend .dn { color: #ef5350; }
   #tools { position: absolute; left: 10px; bottom: 44px; z-index: 6; display: flex; gap: 6px; }
   #tools button {
-    background: #101827; color: #aab6cf; border: 1px solid #263451; border-radius: 4px; cursor: pointer;
+    background: var(--btnbg); color: var(--btnfg); border: 1px solid var(--btnbd); border-radius: 4px; cursor: pointer;
     font: 500 11px 'IBM Plex Sans', system-ui, sans-serif; padding: 4px 9px;
   }
-  #tools button:hover { border-color: #6aa9ff; color: #fff; }
-  #tools button:focus-visible { outline: 2px solid #6aa9ff; outline-offset: 1px; }
+  #tools button:hover { border-color: #3b82f6; color: var(--fg); }
+  #tools button:focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
   #err { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
          color: #ef9a9a; font: 500 14px 'IBM Plex Sans', sans-serif; text-align: center; padding: 24px; }
 </style>
@@ -41,23 +42,39 @@
   const showErr = (m) => { const e = document.getElementById('err'); e.style.display = 'flex'; e.textContent = m; };
   if (!window.LightweightCharts) { showErr('Не вдалося завантажити бібліотеку графіка.'); return; }
   const LW = window.LightweightCharts;
+  // Тема: беремо фон сторінки Streamlit (якщо iframe має доступ), інакше підказка з Python або системна
+  function parseRgb(c) { const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(c || ''); return m ? [+m[1], +m[2], +m[3]] : null; }
+  let pageBg = null, dark = P.theme !== 'light';
+  try {
+    const app = window.parent.document.querySelector('.stApp') || window.parent.document.body;
+    const rgb = parseRgb(window.parent.getComputedStyle(app).backgroundColor);
+    if (rgb) { pageBg = 'rgb(' + rgb.join(',') + ')'; dark = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) < 140; }
+  } catch (e) {
+    if (window.matchMedia && !P.theme) dark = !window.matchMedia('(prefers-color-scheme: light)').matches;
+  }
+  const T = dark
+    ? { bg: pageBg || '#0a0f18', fg: '#d8e0ee', muted: '#8b97b1', line: '#1e2a3f', grid: 'rgba(30,42,63,0.5)', cross: '#52617f', btnbg: '#101827', btnfg: '#aab6cf', btnbd: '#263451', sep: '#33466b' }
+    : { bg: pageBg || '#f5f7fb', fg: '#1b2333', muted: '#5b6882', line: '#d5dcea', grid: 'rgba(120,135,165,0.2)', cross: '#8c9ab5', btnbg: '#ffffff', btnfg: '#42506b', btnbd: '#cfd7e6', sep: '#b9c4da' };
+  const rs = document.documentElement.style;
+  rs.setProperty('--bg', T.bg); rs.setProperty('--fg', T.fg); rs.setProperty('--muted', T.muted); rs.setProperty('--line', T.line);
+  rs.setProperty('--btnbg', T.btnbg); rs.setProperty('--btnfg', T.btnfg); rs.setProperty('--btnbd', T.btnbd);
   const el = document.getElementById('chart');
   const FONT = "'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace";
 
   const chart = LW.createChart(el, {
     autoSize: true,
     layout: {
-      background: { type: 'solid', color: '#0a0f18' }, textColor: '#8b97b1', fontFamily: FONT, fontSize: 11,
-      panes: { separatorColor: '#1e2a3f', separatorHoverColor: '#33466b', enableResize: true },
+      background: { type: 'solid', color: T.bg }, textColor: T.muted, fontFamily: FONT, fontSize: 11,
+      panes: { separatorColor: T.line, separatorHoverColor: T.sep, enableResize: true },
     },
-    grid: { vertLines: { color: 'rgba(30,42,63,0.5)' }, horzLines: { color: 'rgba(30,42,63,0.5)' } },
+    grid: { vertLines: { color: T.grid }, horzLines: { color: T.grid } },
     crosshair: {
       mode: LW.CrosshairMode.Normal,
-      vertLine: { color: '#52617f', labelBackgroundColor: '#1e2a3f' },
-      horzLine: { color: '#52617f', labelBackgroundColor: '#1e2a3f' },
+      vertLine: { color: T.cross, labelBackgroundColor: dark ? '#1e2a3f' : '#42506b' },
+      horzLine: { color: T.cross, labelBackgroundColor: dark ? '#1e2a3f' : '#42506b' },
     },
-    rightPriceScale: { borderColor: '#1e2a3f', scaleMargins: { top: 0.06, bottom: 0.14 } },
-    timeScale: { borderColor: '#1e2a3f', timeVisible: !P.daily, secondsVisible: false, rightOffset: 14, barSpacing: P.bar_spacing || 7, minBarSpacing: 1.5 },
+    rightPriceScale: { borderColor: T.line, scaleMargins: { top: 0.06, bottom: 0.14 } },
+    timeScale: { borderColor: T.line, timeVisible: !P.daily, secondsVisible: false, rightOffset: 14, barSpacing: P.bar_spacing || 7, minBarSpacing: 1.5 },
     localization: { priceFormatter: (p) => p.toFixed(2) },
     handleScale: { axisPressedMouseMove: { time: true, price: true }, mouseWheel: true, pinch: true },
     handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
@@ -159,7 +176,7 @@
       l.setData(data);
       if (isLast) lastCvd = l;
     });
-    if (lastCvd) lastCvd.createPriceLine({ price: 0, color: '#33415c', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
+    if (lastCvd) lastCvd.createPriceLine({ price: 0, color: T.sep, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
     try {
       const panes = chart.panes();
       if (panes[1]) { panes[0].setStretchFactor(3.4); panes[1].setStretchFactor(1); }
