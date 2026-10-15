@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, time as dtime
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -49,29 +51,54 @@ def resample_ohlcv(d: pd.DataFrame, tf: str) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------- VWAP і CVD
-def session_vwap_cvd(d1: pd.DataFrame, mode: str = "RTH") -> pd.DataFrame:
-    """Сесійні VWAP (±1σ) і оціночна CVD за 1-хвилинними свічками.
+def _norm_cdf(x: np.ndarray) -> np.ndarray:
+    return 0.5 * (1.0 + np.vectorize(math.erf)(x / math.sqrt(2.0)))
+
+
+def bvc_delta(d: pd.DataFrame) -> np.ndarray:
+    """Дельта обсягу методом Bulk Volume Classification (Easley, López de Prado, O'Hara, 2012).
+
+    Частка покупок = Φ(ΔP / σ), де ΔP зміна ціни закриття свічки, σ ковзне std цієї зміни.
+    Це оцінка без даних про агресора; точна дельта можлива лише з тиковими даними bid/ask.
+    """
+    close = d["Close"].astype(float)
+    dp = close.diff().fillna(close - d["Open"].astype(float))
+    sd = dp.rolling(60, min_periods=15).std().bfill().replace(0, np.nan)
+    sd = sd.fillna(max(float(dp.abs().mean()), 1e-9))
+    z = (dp / sd).to_numpy()
+    buy_frac = _norm_cdf(z)
+    return d["Volume"].to_numpy(float) * (2.0 * buy_frac - 1.0)
+
+
+def session_vwap_cvd(d1: pd.DataFrame, mode: str = "RTH", real: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Сесійні VWAP (±1σ), дельта і CVD за 1-хвилинними свічками.
 
     mode = "RTH"    -> скидання о 09:30 ET, поза RTH значення порожні;
     mode = "Globex" -> скидання о 18:00 ET.
-    CVD оцінюється за положенням закриття в діапазоні свічки: без тикових даних це наближення.
+    Якщо передано `real` (колонки buy, sell на мінутному індексі, UTC), дельта точна (з агресором);
+    інакше це BVC-оцінка за свічками, і колонка `exact` = False.
     """
     d = add_session_cols(d1)
     if mode == "RTH":
         d = d[d["rth"]].copy()
     if d.empty:
-        return pd.DataFrame(columns=["sess", "vwap", "u1", "l1", "delta", "cvd"])
+        return pd.DataFrame(columns=["sess", "vwap", "u1", "l1", "delta", "cvd", "vol", "exact"])
 
-    rng = (d["High"] - d["Low"]).to_numpy()
-    cl = d["Close"].to_numpy()
-    pos = np.where(rng > 0, ((cl - d["Low"].to_numpy()) - (d["High"].to_numpy() - cl)) / np.where(rng > 0, rng, 1.0),
-                   np.sign(cl - d["Open"].to_numpy()))
     vol = d["Volume"].to_numpy(float)
     tp = ((d["High"] + d["Low"] + d["Close"]) / 3.0).to_numpy()
+    exact = False
+    delta = bvc_delta(d)
+    if real is not None and not real.empty:
+        r = real.reindex(d.index)
+        have = r["buy"].notna().to_numpy()
+        if have.mean() > 0.8:
+            delta = np.where(have, (r["buy"].fillna(0) - r["sell"].fillna(0)).to_numpy(float), delta)
+            exact = True
 
     out = pd.DataFrame(index=d.index)
     out["sess"] = d["td"].to_numpy()
-    out["delta"] = vol * pos
+    out["delta"] = delta
+    out["vol"] = vol
     g = out["sess"]
     out["cvd"] = out.groupby(g)["delta"].cumsum()
     pv = pd.Series(tp * vol, index=d.index).groupby(g).cumsum()
@@ -81,6 +108,7 @@ def session_vwap_cvd(d1: pd.DataFrame, mode: str = "RTH") -> pd.DataFrame:
     var = (p2v / v.replace(0, np.nan)) - vw ** 2
     sd = np.sqrt(var.clip(lower=0))
     out["vwap"], out["u1"], out["l1"] = vw, vw + sd, vw - sd
+    out["exact"] = exact
     return out
 
 
@@ -93,6 +121,8 @@ def to_display_tf(sv: pd.DataFrame, tf: str) -> pd.DataFrame:
         return sv.iloc[0:0]
     r = sv.resample(rule)
     out = r[["vwap", "u1", "l1", "cvd"]].last()
+    out["delta"] = r["delta"].sum()
+    out["vol"] = r["vol"].sum()
     out["sess"] = r["sess"].last()
     return out.dropna(subset=["sess"])
 
@@ -116,7 +146,7 @@ def compute_key_levels(d5: pd.DataFrame, daily: pd.DataFrame | None, now_et: dat
                        d1: pd.DataFrame | None = None) -> KeyLevels:
     """PDH/PDL (лише RTH), OVNH/OVNL (16:00 → 09:29 ET), IBH/IBL, VAH/VAL/POC учора, DO, NYM, PWH/PWL, PMH/PML, WO, MO.
 
-    Визначення відповідають методичці VART (T·01, T·02): PDH/PDL це High/Low RTH-сесії попереднього дня.
+    Визначення відповідають методичці (T·01, T·02): PDH/PDL це High/Low RTH-сесії попереднього дня.
     """
     from tpo import tpo_counts, value_area
 

@@ -100,6 +100,9 @@ class GexResult:
     atm_iv: float | None
     profile: pd.DataFrame = field(default_factory=pd.DataFrame)   # strike, call, put, net ($ млрд)
     notes: list[str] = field(default_factory=list)
+    mq: dict = field(default_factory=dict)            # рівні у стилі MenthorQ (ціни індексу): назва -> ціна
+    mq_profile: pd.DataFrame = field(default_factory=pd.DataFrame)  # профіль усіх експірацій для правої панелі
+    summary: dict = field(default_factory=dict)       # дані для вкладки «Підсумок»
 
     @property
     def regime(self) -> str:
@@ -164,6 +167,101 @@ def atm_iv(df_exp: pd.DataFrame, spot: float) -> float | None:
     k = df_exp.loc[(df_exp["strike"] - spot).abs().idxmin(), "strike"]
     near = df_exp[(df_exp["strike"] == k) & (df_exp["iv"] > 0.01)]
     return float(near["iv"].mean()) if not near.empty else None
+
+
+# ---------------------------------------------------------------- рівні у стилі MenthorQ
+MQ_ORDER = ["Call Resistance", "Put Support", "HVL", "1D Min", "1D Max", "Call Resistance 0DTE",
+            "Put Support 0DTE", "HVL 0DTE", "Gamma Wall 0DTE"] + [f"GEX {i}" for i in range(1, 11)]
+
+
+def _strike_table(frame: pd.DataFrame, spot: float, now_et: datetime) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame(columns=["strike", "call", "put", "net"])
+    k = frame["strike"].to_numpy(float)
+    iv = frame["iv"].to_numpy(float)
+    t = np.array([years_to_close(e, now_et) for e in frame["exp"]], dtype=float)
+    g = bs_gamma(spot, k, iv, t) * frame["oi"].to_numpy(float) * C.CONTRACT_MULT * spot ** 2 * 0.01 / 1e9
+    tmp = frame[["strike", "cp"]].copy()
+    tmp["g"] = g
+    piv = tmp.pivot_table(index="strike", columns="cp", values="g", aggfunc="sum", fill_value=0.0)
+    for col in ("C", "P"):
+        if col not in piv:
+            piv[col] = 0.0
+    out = pd.DataFrame({"strike": piv.index.astype(float), "call": piv["C"].values, "put": piv["P"].values})
+    out["net"] = out["call"] - out["put"]
+    return out.sort_values("strike").reset_index(drop=True)
+
+
+def hvl_level(tab: pd.DataFrame, spot: float) -> float | None:
+    """HVL: точка перегину кривої накопиченої гамми, де нахил (net по страйках) змінює знак.
+
+    Вище HVL дилерська гамма зазвичай гасить рух (повернення до середнього), нижче посилює (тренд).
+    Беремо перегин, найближчий до споту; якщо його немає, повертаємо None.
+    """
+    if tab is None or len(tab) < 3:
+        return None
+    net = tab["net"].rolling(3, center=True, min_periods=1).mean().to_numpy()
+    ks = tab["strike"].to_numpy()
+    best, dist = None, None
+    for i in range(len(ks) - 1):
+        a, b = net[i], net[i + 1]
+        if a * b < 0:
+            x = ks[i] + (ks[i + 1] - ks[i]) * (a / (a - b))
+            d = abs(x - spot)
+            if dist is None or d < dist:
+                best, dist = float(x), d
+    return best
+
+
+def menthorq_levels(tab_all: pd.DataFrame, tab_0: pd.DataFrame, spot: float, em: float | None) -> dict:
+    """Набір рівнів з назвами MenthorQ. Усі ціни в одиницях індексу."""
+    out: dict[str, float] = {}
+
+    def top(tab, col, above: bool | None):
+        if tab is None or tab.empty:
+            return None
+        sub = tab
+        if above is True:
+            sub = tab[tab["strike"] >= spot]
+        elif above is False:
+            sub = tab[tab["strike"] <= spot]
+        if sub.empty or sub[col].max() <= 0:
+            sub = tab
+        return float(sub.loc[sub[col].idxmax(), "strike"]) if sub[col].max() > 0 else None
+
+    cr, ps = top(tab_all, "call", True), top(tab_all, "put", False)
+    if cr is not None:
+        out["Call Resistance"] = cr
+    if ps is not None:
+        out["Put Support"] = ps
+    h = hvl_level(tab_all, spot)
+    if h is not None:
+        out["HVL"] = h
+    if em:
+        out["1D Min"], out["1D Max"] = round(spot - em, 2), round(spot + em, 2)
+    cr0, ps0 = top(tab_0, "call", True), top(tab_0, "put", False)
+    if cr0 is not None:
+        out["Call Resistance 0DTE"] = cr0
+    if ps0 is not None:
+        out["Put Support 0DTE"] = ps0
+    h0 = hvl_level(tab_0, spot)
+    if h0 is not None:
+        out["HVL 0DTE"] = h0
+    if tab_0 is not None and not tab_0.empty and tab_0["net"].abs().max() > 0:
+        out["Gamma Wall 0DTE"] = float(tab_0.loc[tab_0["net"].abs().idxmax(), "strike"])
+    # GEX 1..10: найбільші за модулем гамми страйки, крім уже названих основних рівнів
+    if tab_all is not None and not tab_all.empty:
+        taken = {out.get(n) for n in ("Call Resistance", "Put Support", "HVL")}
+        rank = tab_all.assign(a=tab_all["net"].abs()).sort_values("a", ascending=False)
+        n = 0
+        for r in rank.itertuples():
+            if r.a <= 0 or n >= 10:
+                break
+            if r.strike in taken:
+                continue
+            n += 1
+            out[f"GEX {n}"] = float(r.strike)
+    return out
 
 
 # ---------------------------------------------------------------- головна функція
@@ -248,12 +346,41 @@ def compute_gex(df: pd.DataFrame, spot: float, now_et: datetime, scope: str = "0
     w = spot * C.PROFILE_WINDOW
     prof_view = prof[prof["strike"].between(spot - w, spot + w)].reset_index(drop=True)
 
+    tab_all = _strike_table(base, spot, now_et)
+    tab_0 = _strike_table(first, spot, now_et)
+    mq = menthorq_levels(tab_all, tab_0, spot, em)
+    wv = spot * C.PROFILE_WINDOW
+    mq_prof = tab_all[tab_all["strike"].between(spot - wv, spot + wv)].reset_index(drop=True)
+    # Підсумок: GEX за терміном до експірації, співвідношення пут/кол за OI, нахил (skew)
+    by_dte = {}
+    for label, lo, hi in (("0DTE", 0, 0), ("1-7D", 1, 7), ("8-30D", 8, 30), ("31D+", 31, 10 ** 6)):
+        m = base[(base["exp"] >= today + timedelta(days=lo)) & (base["exp"] <= today + timedelta(days=hi))]
+        by_dte[label] = float(_strike_table(m, spot, now_et)["net"].sum()) if not m.empty else 0.0
+    oi_c = float(base.loc[base["cp"] == "C", "oi"].sum())
+    oi_p = float(base.loc[base["cp"] == "P", "oi"].sum())
+    vol_c = float(base.loc[base["cp"] == "C", "vol"].sum())
+    vol_p = float(base.loc[base["cp"] == "P", "vol"].sum())
+    skew = None
+    later = base[base["exp"] >= today + timedelta(days=7)]
+    sk_frame = later[later["exp"] == later["exp"].min()] if not later.empty else base[base["exp"] == first_exp]
+    if not sk_frame.empty:
+        pu = sk_frame[(sk_frame["cp"] == "P") & (sk_frame["iv"] > 0.01)]
+        ca = sk_frame[(sk_frame["cp"] == "C") & (sk_frame["iv"] > 0.01)]
+        if not pu.empty and not ca.empty:
+            ip = pu.loc[(pu["strike"] - spot * 0.95).abs().idxmin(), "iv"]
+            ic = ca.loc[(ca["strike"] - spot * 1.05).abs().idxmin(), "iv"]
+            skew = float(ip - ic) * 100.0       # пункти волатильності: 95% пут мінус 105% кол
+    summary = {"skew": skew, "by_dte": by_dte, "pc_oi": (oi_p / oi_c) if oi_c else None, "pc_vol": (vol_p / vol_c) if vol_c else None,
+               "oi_call": oi_c, "oi_put": oi_p, "net_all_b": float(tab_all["net"].sum()),
+               "call_b": float(tab_all["call"].sum()), "put_b": float(tab_all["put"].sum())}
+
     return GexResult(
         spot=float(spot), scope=scope, n_options=int(len(scoped)),
         exp_first=scoped["exp"].min(), exp_last=scoped["exp"].max(),
         net_total_b=float(gex_at_spot), call_wall=call_wall, put_wall=put_wall, flip=flip,
         max_pain=pain, pin=pin, king=king, zero_call_wall=z_call, zero_put_wall=z_put,
         em_1d=em, atm_iv=iv_atm, profile=prof_view, notes=notes,
+        mq=mq, mq_profile=mq_prof, summary=summary,
     )
 
 

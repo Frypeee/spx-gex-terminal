@@ -1,13 +1,15 @@
-"""ІІ-помічник за плейбуком VART на Claude API. Ключ береться з секретів, у репозиторій не потрапляє."""
+"""ІІ-помічник за методичкою на Claude API. Ключ береться з секретів, у репозиторій не потрапляє."""
 from __future__ import annotations
 
 import requests
+
+from knowledge import GAMMA_KB
 
 API_URL = "https://api.anthropic.com/v1/messages"
 DEFAULT_MODEL = "claude-haiku-5-5"
 MODELS = {"Швидка й дешева (Haiku 5.5)": "claude-haiku-5-5", "Розумніша (Sonnet 5.5)": "claude-sonnet-5-5"}
 
-SYSTEM = """Ти помічник трейдера, що працює за плейбуком VART Research (ES і NQ). Відповідай українською, коротко: до 6 речень.
+SYSTEM = """Ти помічник трейдера, що працює за методичкою (ES і NQ). Відповідай українською, коротко: до 6 речень.
 Формат відповіді: 1) Висновок (що робити зараз або чекати). 2) Рівень і патерн входу. 3) Скасування. Пропускай пункти, які не стосуються питання.
 
 Правила плейбука:
@@ -21,6 +23,8 @@ SYSTEM = """Ти помічник трейдера, що працює за пл�
 - Плейбук слабший у дні FOMC/CPI/NFP, при події у mega-cap, при breadth divergence.
 - GEX: позитивна гама гасить рух (fade біля call/put wall), негативна підсилює (тренд).
 
+""" + "\n\n" + GAMMA_KB + """
+
 Використовуй ЛИШЕ дані з блоку «Поточний стан». Якщо даних бракує, скажи це прямо. Не вигадуй цифр. Не обіцяй результат."""
 
 
@@ -29,7 +33,7 @@ def build_context(snap: dict) -> str:
     L = []
     L.append(f"Час: {snap['time_kyiv']} за Києвом. Інструмент: {snap['instrument']}. Ціна: {snap['price']:.2f}. Джерело цін: {snap.get('source', 'н/д')}.")
     if snap.get("scenario"):
-        L.append(f"Сценарій VART: {snap['scenario']}.")
+        L.append(f"Сценарій за методичкою: {snap['scenario']}.")
     if snap.get("flow_now"):
         L.append(f"Поточний крок гілки: {snap['flow_now']}")
     if snap.get("flow_wait"):

@@ -53,9 +53,25 @@ def _session_chunks(df: pd.DataFrame, ts: np.ndarray, cols: list[str], keep: int
     return chunks
 
 
+def ib_box(bars: pd.DataFrame, td, ibh: float | None, ibl: float | None, tf: str) -> dict | None:
+    """Прямокутник Initial Balance (09:30–10:30 NY) для графіка; час у київських «настінних» секундах."""
+    if ibh is None or ibl is None or td is None or tf in ("4h", "1D") or bars is None or bars.empty:
+        return None
+    start = pd.Timestamp(f"{td} 09:30", tz=C.ET)
+    end = pd.Timestamp(f"{td} 10:30", tz=C.ET)
+    ts = to_ts(bars.index)
+    t0 = int(to_ts(pd.DatetimeIndex([start.tz_convert("UTC")]))[0])
+    t1 = int(to_ts(pd.DatetimeIndex([end.tz_convert("UTC")]))[0])
+    after = ts[ts >= t0]
+    if len(after) == 0:
+        return None
+    return {"t0": int(after[0]), "t1": int(ts[-1]), "ib_end": t1, "hi": round(float(ibh), 2), "lo": round(float(ibl), 2)}
+
+
 def build_chart_html(*, title: str, key: str, tf: str, bars: pd.DataFrame, levels: list[dict],
                      profile: list[dict], sv: pd.DataFrame | None, show_vwap: bool, show_cvd: bool,
-                     theme: str = "dark") -> str:
+                     theme: str = "dark", ib: dict | None = None, show_ib: bool = True,
+                     cvd_exact: bool = False) -> str:
     daily = tf == "1D"
     ts = to_ts(bars.index, daily=daily)
     candles = [
@@ -69,19 +85,24 @@ def build_chart_html(*, title: str, key: str, tf: str, bars: pd.DataFrame, level
         for t, v, o, c in zip(ts, bars["Volume"], bars["Open"], bars["Close"])
     ]
 
-    vwap, cvd = [], []
+    vwap, cvd, delta = [], [], []
     if sv is not None and not sv.empty and tf in ("1m", "5m", "15m", "30m", "1h"):
         sv = sv[(sv.index >= bars.index[0])]
         sts = to_ts(sv.index)
         if show_vwap:
             for ch in _session_chunks(sv, sts, ["vwap", "u1", "l1"]):
                 vwap.append({"v": ch["vwap"], "u": ch["u1"], "l": ch["l1"]})
-        if show_cvd:
+        if show_cvd and sv["cvd"].notna().any():
             cvd = [ch["cvd"] for ch in _session_chunks(sv, sts, ["cvd"])]
+            dv = sv["delta"].to_numpy(float)
+            delta = [{"time": int(t), "value": round(float(v), 1),
+                      "color": "rgba(38,166,154,0.8)" if v >= 0 else "rgba(239,83,80,0.8)"}
+                     for t, v in zip(sts, dv) if np.isfinite(v)]
 
     payload = {
         "title": title, "key": key, "theme": theme, "daily": daily, "candles": candles, "volume": volume,
-        "levels": levels, "profile": profile, "vwap": vwap, "cvd": cvd,
+        "levels": levels, "profile": profile, "vwap": vwap, "cvd": cvd, "delta": delta,
+        "ib": ib if show_ib else None, "ib_available": bool(ib), "cvd_exact": cvd_exact,
         "default_bars": DEFAULT_BARS.get(tf, 150), "bar_spacing": BAR_SPACING.get(tf, 7),
     }
     data = json.dumps(payload, separators=(",", ":"), allow_nan=False).replace("</", "<\\/")

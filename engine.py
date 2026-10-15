@@ -15,8 +15,8 @@ import config as C
 from news import news_score
 
 SUPPORT_ORDER = [
-    "VWAP", "PUT WALL", "0DTE PUT", "FLIP", "IBH", "IBL", "OVNH", "OVNL", "DO", "NYM", "RTH open",
-    "PDH", "PDL", "VAH", "VAL", "POC", "PIN", "MAX PAIN", "CALL WALL", "0DTE CALL", "PWH", "PWL", "WO",
+    "VWAP", "Put Support", "Put Support 0DTE", "HVL", "IBH", "IBL", "OVNH", "OVNL", "DO", "NYM", "RTH open",
+    "PDH", "PDL", "VAH", "VAL", "POC", "PIN", "MAX PAIN", "Call Resistance", "Call Resistance 0DTE", "PWH", "PWL", "WO",
 ]
 
 
@@ -131,7 +131,7 @@ def build_read(*, inst: C.Instrument, spot: float, basis: float | None, levels: 
     regime_pos = None
     if gex is not None:
         regime_pos = gex.net_total_b >= 0
-        cw, pw, fl = levels.get("CALL WALL"), levels.get("PUT WALL"), levels.get("FLIP")
+        cw, pw, fl = levels.get("Call Resistance"), levels.get("Put Support"), levels.get("HVL")
         near = spot * 0.0025
         if regime_pos:
             if cw is not None and abs(cw - spot) <= near:
@@ -153,11 +153,11 @@ def build_read(*, inst: C.Instrument, spot: float, basis: float | None, levels: 
     if vwap is not None:
         factors.append(("VWAP", 1.0 if spot > vwap else -1.0, f"Ціна {'вище' if spot > vwap else 'нижче'} сесійного VWAP {fmt(vwap)}."))
 
-    # 3. VART Flow: відкриття відносно OVN, IB, sweep PDH/PDL (плейбук T·02-T·11)
+    # 3. Чекпоінти дня: відкриття відносно OVN, IB, sweep PDH/PDL (плейбук T·02-T·11)
     if flow is not None:
-        factors.append(("Сценарій VART", flow.score, f"{flow.scenario}. {flow.now}"[:220]))
+        factors.append(("Сценарій за методичкою", flow.score, f"{flow.scenario}. {flow.now}"[:220]))
     else:
-        unavailable.append("VART flow")
+        unavailable.append("чекпоінти дня")
     ibh, ibl = levels.get("IBH"), levels.get("IBL")
 
     # 5. Order flow (оціночна CVD)
@@ -173,10 +173,10 @@ def build_read(*, inst: C.Instrument, spot: float, basis: float | None, levels: 
     else:
         unavailable.append("новини")
 
-    # 7. Макрофон
+    # 7. Глобальний ринок
     ms, mnotes = macro_score(macro, fng, sectors)
     if mnotes:
-        factors.append(("Макрофон", ms, "; ".join(mnotes)))
+        factors.append(("Глобальний ринок", ms, "; ".join(mnotes)))
     else:
         unavailable.append("макро")
 
@@ -255,7 +255,7 @@ def todays_read(inst: C.Instrument, spot: float, gex, levels: dict[str, float]) 
         return f"{inst.key} {fmt(spot)}. GEX недоступний.", "Опціонні дані CBOE не завантажились. Рівні гами не показуємо, щоб не вводити в оману."
     reg = "довгі" if gex.net_total_b >= 0 else "короткі"
     head = f"{inst.key} {fmt(spot)}. Дилери {reg} гамму."
-    cw, pw, fl = levels.get("CALL WALL"), levels.get("PUT WALL"), levels.get("FLIP")
+    cw, pw, fl = levels.get("Call Resistance"), levels.get("Put Support"), levels.get("HVL")
     parts = [f"Чистий gamma дилерів {'+' if gex.net_total_b >= 0 else '−'}${abs(gex.net_total_b):.2f}B на 1% руху."]
     if fl is not None:
         parts.append(f"Спот на {abs(spot - fl):.0f} п. {'вище' if spot > fl else 'нижче'} flip {fmt(fl, 0)}.")

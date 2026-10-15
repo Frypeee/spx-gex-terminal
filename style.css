@@ -79,7 +79,7 @@ header[data-testid="stHeader"] { background: transparent; }
 .dir.f { color:var(--muted); background:var(--hover); }
 .alert { border-left:3px solid var(--pain); background:color-mix(in srgb, var(--pain) 11%, transparent); padding:6px 10px; margin-bottom:6px; font:400 12.5px/1.5 var(--sans); }
 
-/* VART Flow */
+/* Чекпоінти дня */
 .vf { display:grid; grid-template-columns:minmax(290px,0.85fr) 2.15fr; gap:22px; }
 @media (max-width:1100px) { .vf { grid-template-columns:1fr; } }
 .vf-sum .lbl { font:500 11px var(--sans); color:var(--muted); margin:12px 0 3px; display:flex; align-items:center; }
@@ -154,3 +154,28 @@ header[data-testid="stHeader"] { background: transparent; }
 /* Керування */
 ::-webkit-scrollbar { width:6px; height:6px; } ::-webkit-scrollbar-thumb { background:rgba(128,142,168,0.4); border-radius:3px; }
 @media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
+
+/* Підсумок і монітор рівнів */
+.sg { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
+.sc { border:1px solid var(--line); border-radius:4px; padding:12px 14px; background:var(--panel); min-width:0; }
+.sct { font:500 11px var(--sans); color:var(--muted); text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px; display:flex; align-items:center; gap:4px; }
+.sc .big { font:600 20px/1.25 var(--sans); } .sc .big.up { color:var(--put); } .sc .big.dn { color:var(--call); }
+.sc .sub { font:400 12px/1.5 var(--sans); color:var(--muted); }
+.bar-row { display:grid; grid-template-columns:54px 1fr 64px; gap:8px; align-items:center; font:400 12px var(--sans); margin:3px 0; }
+.bar-row .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; } .bar-row .bar i { display:block; height:100%; }
+.strip { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:10px; border:1px solid var(--line); border-radius:4px; padding:10px 14px; background:var(--panel); }
+.strip .l { font:500 11px var(--sans); color:var(--muted); } .strip .v { font:600 17px var(--mono); }
+.strip.bias-long { border-left:3px solid var(--put); } .strip.bias-short { border-left:3px solid var(--call); } .strip.bias-wait { border-left:3px solid var(--pain); }
+.lsr { display:grid; grid-template-columns:1.6fr 1fr 1fr .9fr; gap:8px; padding:5px 2px; border-bottom:1px solid var(--line); font:400 13px var(--sans); align-items:center; }
+.lsr.h { font:500 11px var(--sans); color:var(--muted); text-transform:uppercase; }
+.tag { font:600 11px var(--mono); padding:1px 6px; border-radius:3px; text-align:center; }
+.tag.long { color:var(--put); background:color-mix(in srgb, var(--put) 14%, transparent); }
+.tag.short { color:var(--call); background:color-mix(in srgb, var(--call) 14%, transparent); }
+.theme-sw { display:inline-flex; gap:4px; font:500 12px var(--sans); }
+.theme-sw a { border:1px solid var(--line); border-radius:4px; padding:5px 10px; color:inherit; text-decoration:none; }
+.theme-sw a:hover { border-color:var(--flip); }
+/* без накладання колонок і виступів за межі */
+.panel, .sc, .strip, .cmp .col { min-width:0; overflow-wrap:anywhere; }
+[data-testid="stColumn"], [data-testid="stHorizontalBlock"] > div { min-width:0 !important; }
+[data-testid="stTabs"] [role="tabpanel"] { padding-top:10px; }
+.strip .b { font:700 17px var(--mono); } .strip .b.long { color:var(--put); } .strip .b.short { color:var(--call); } .strip .b.wait { color:var(--pain); }

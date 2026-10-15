@@ -1,4 +1,4 @@
-"""GEX Terminal: одна сторінка для роботи за методичкою.
+"""Помічник SPX500: одна сторінка для роботи за методичкою.
 
 Запуск: streamlit run app.py
 Усі дані реальні. Якщо джерело недоступне, відповідний блок показує причину, а не вигадані числа.
@@ -18,6 +18,7 @@ import config as C
 import data, ui
 import engine as E
 import flow as FL
+import journal as J
 import gex as G
 import levels as L
 import news as N
@@ -25,13 +26,16 @@ from cache import CACHE
 
 COL = C.COL
 
-st.set_page_config(page_title="GEX Terminal", page_icon="◩", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Помічник SPX500", page_icon="◩", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(ui.CSS, unsafe_allow_html=True)
 
 TF_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1D"]
-LAYER_OPTIONS = ["GEX", "Рівні", "VWAP", "CVD", "Профіль", "EM"]
+LAYER_OPTIONS = ["Gamma", "0DTE", "GEX 1-10", "Рівні", "IB", "VWAP", "CVD", "Профіль", "EM"]
+LAYER_DEFAULT = ["Gamma", "Рівні", "IB", "VWAP", "CVD", "Профіль"]
+TAB_OPTIONS = ["Підсумок", "Рівні й сигнал", "Чекпоінти дня", "Сценарій", "Новини", "Глобальний ринок", "Gamma за активами"]
 BAR_CAP = {"5m": 2500, "15m": 2200, "30m": 1800, "1h": 1500, "4h": 600}
-ALL_LEVELS = ["CALL WALL", "PUT WALL", "FLIP", "MAX PAIN", "PIN", "GEX KING", "VWAP", "PDH", "PDL", "OVNH", "OVNL",
+ALL_LEVELS = ["Call Resistance", "Put Support", "HVL", "1D Min", "1D Max", "Call Resistance 0DTE", "Put Support 0DTE",
+              "HVL 0DTE", "Gamma Wall 0DTE", "MAX PAIN", "PIN", "VWAP", "PDH", "PDL", "OVNH", "OVNL",
               "IBH", "IBL", "VAH", "POC", "VAL", "NYM", "DO", "RTH open", "PWH", "PWL"]
 AI_LIMIT = 40
 
@@ -123,7 +127,7 @@ def sidebar() -> dict:
         if st.button("Надіслати тест", key="al_test"):
             st.toast("Тестове сповіщення", icon=":material/notifications:")
             if tg_ok and any(cfg["types"][k]["telegram"] for k in cfg["types"]):
-                err = A.send_telegram(TG_TOKEN, TG_CHAT, "GEX Terminal: тестове сповіщення")
+                err = A.send_telegram(TG_TOKEN, TG_CHAT, "Помічник SPX500: тестове сповіщення")
                 st.caption("Telegram: " + (err or "надіслано"))
         st.caption("Сповіщення працюють, поки сторінка відкрита у браузері.")
         with st.expander("Журнал сповіщень"):
@@ -134,7 +138,7 @@ def sidebar() -> dict:
             st.success("Ціни: OANDA CFD, реальний час.")
         else:
             st.warning("Ціни: Yahoo (CME), затримка ~10 хв. Для реального часу додайте `OANDA_TOKEN` у Secrets.")
-        st.caption("Тема: меню ⋮ у правому верхньому куті → Settings → Theme (світла, темна або системна).")
+        st.caption("Тема: кнопки «Світла / Темна» у верхній панелі або меню ⋮ → Settings → Theme.")
     return cfg
 
 
@@ -146,7 +150,8 @@ def pick(label, options, default, key):
 
 alert_cfg = sidebar()
 
-c1, c2, c3, c4, c5, c6 = st.columns([1.0, 3.2, 1.6, 1.3, 3.2, 0.9], vertical_alignment="center")
+c1, c2, c3, c4, c6 = st.columns([1.0, 3.2, 1.8, 1.4, 1.0], vertical_alignment="center")
+c5 = st.container()
 with c1:
     inst_key = pick("Інструмент", list(C.INSTRUMENTS), "ES", "inst")
 with c2:
@@ -156,11 +161,20 @@ with c3:
 with c4:
     sess_mode = pick("Сесія CVD і VWAP", ["RTH", "Globex"], "RTH", "sess")
 with c5:
-    layers = st.pills("Шари", LAYER_OPTIONS, selection_mode="multi", default=LAYER_OPTIONS, key="layers",
+    layers = st.pills("Шари", LAYER_OPTIONS, selection_mode="multi", default=LAYER_DEFAULT, key="layers",
                       label_visibility="collapsed") or []
 with c6:
     if st.button("Оновити", use_container_width=True, help="Скинути кеш і завантажити свіжі дані"):
         CACHE.clear()
+st.markdown('<div class="theme-sw"><span class="muted" style="align-self:center">Тема:</span>'
+            '<a href="?embed_options=light_theme" target="_self">☀ Світла</a>'
+            '<a href="?embed_options=dark_theme" target="_self">☾ Темна</a></div>', unsafe_allow_html=True)
+with st.expander("Вікна й макет"):
+    tabs_on = st.pills("Показувати вкладки", TAB_OPTIONS, selection_mode="multi", default=TAB_OPTIONS, key="tabs_on") or []
+    show_levels_panel = st.toggle("Панель рівнів праворуч від графіка", True, key="lv_panel")
+    chart_h = st.slider("Висота графіка, px", 480, 1000, 760, 20, key="chart_h")
+    detach = st.selectbox("Відкріпити вкладку в окреме вікно", ["—"] + TAB_OPTIONS, key="detach_sel",
+                          help="Відкриє вибрану вкладку у спливному вікні поверх сторінки.")
 
 basis_override = float(st.session_state.get("basis_override", 0.0) or 0.0)
 REFRESH = "15s" if OANDA_TOKEN else "30s"
@@ -194,33 +208,38 @@ def _build_levels(inst, layers, gex, basis, key, vwap, spot, scope):
     spec, table, eng = [], [], {}
     sh = (lambda p: G.shift_level(p, basis, inst.tick)) if basis is not None else (lambda p: None)
 
-    def add(group_on, name, price, color, style="dashed", width=1, title=None):
+    def add(group_on, name, price, color, style="dashed", width=1, title=None, in_table=True):
         if price is None:
             return
         eng[name] = price
         if group_on:
             spec.append(CH.level_spec(price, title or name, color, style, width))
-        table.append(("", name, price, color))
+        if in_table:
+            table.append(("", name, price, color))
 
     if gex is not None and basis is not None:
-        on = "GEX" in layers
-        table.append(("Gamma (рівні в цінах інструмента)", "", None, None))
-        add(on, "CALL WALL", sh(gex.call_wall), COL["call"], "dashed", 2)
-        add(on, "PUT WALL", sh(gex.put_wall), COL["put"], "dashed", 2)
-        add(on, "FLIP", sh(gex.flip), COL["flip"], "large", 1)
+        mq = gex.mq
+        on, on0, on10 = "Gamma" in layers, "0DTE" in layers, "GEX 1-10" in layers
+        table.append(("Gamma-рівні (ціни інструмента)", "", None, None))
+        hvl = mq.get("HVL") if mq.get("HVL") is not None else gex.flip
+        add(on, "Call Resistance", sh(mq.get("Call Resistance", gex.call_wall)), COL["call"], "dashed", 2)
+        add(on, "Put Support", sh(mq.get("Put Support", gex.put_wall)), COL["put"], "dashed", 2)
+        add(on, "HVL", sh(hvl), COL["flip"], "large", 1)
         add(on, "MAX PAIN", sh(gex.max_pain), COL["pain"], "dotted")
         add(on, "PIN", sh(gex.pin), COL["pin"], "dotted", title="PIN 0DTE")
-        add(on, "GEX KING", sh(gex.king), COL["king"], "dotted")
-        if scope != "0DTE":
-            zc, zp = sh(gex.zero_call_wall), sh(gex.zero_put_wall)
-            if zc is not None and zc != eng.get("CALL WALL"):
-                add(on, "0DTE CALL", zc, COL["call"], "dotted", title="CALL 0DTE")
-            if zp is not None and zp != eng.get("PUT WALL"):
-                add(on, "0DTE PUT", zp, COL["put"], "dotted", title="PUT 0DTE")
-        if "EM" in layers and gex.em_1d:
-            center = key.get("RTH open") or key.get("DO") or spot
-            spec.append(CH.level_spec(center + gex.em_1d, "EM +1σ", COL["muted"], "dotted"))
-            spec.append(CH.level_spec(center - gex.em_1d, "EM −1σ", COL["muted"], "dotted"))
+        if gex.em_1d:
+            # 1D Min/Max від вчорашнього закриття, щоб рівні не «їздили» разом із ціною
+            center = key.get("PD close") or spot
+            add("EM" in layers, "1D Min", round(center - gex.em_1d, 2), COL["muted"], "dotted")
+            add("EM" in layers, "1D Max", round(center + gex.em_1d, 2), COL["muted"], "dotted")
+        table.append(("0DTE", "", None, None))
+        add(on0, "Call Resistance 0DTE", sh(mq.get("Call Resistance 0DTE")), COL["call"], "dotted")
+        add(on0, "Put Support 0DTE", sh(mq.get("Put Support 0DTE")), COL["put"], "dotted")
+        add(on0, "HVL 0DTE", sh(mq.get("HVL 0DTE")), COL["flip"], "dotted")
+        add(on0, "Gamma Wall 0DTE", sh(mq.get("Gamma Wall 0DTE")), COL["king"], "dotted")
+        table.append(("GEX 1–10 (за силою гамми)", "", None, None))
+        for i in range(1, 11):
+            add(on10, f"GEX {i}", sh(mq.get(f"GEX {i}")), "#c98a3a", "dotted")
 
     if vwap is not None:
         eng["VWAP"] = vwap
@@ -238,7 +257,9 @@ def _build_levels(inst, layers, gex, basis, key, vwap, spot, scope):
             ("PWH", COL["muted"], "dotted", 1), ("PWL", COL["muted"], "dotted", 1),
         ]
         for name, color, style, width in order:
-            add(on, name, key.get(name), color, style, width)
+            # IBH/IBL малюються зоною (шар «IB»), тому лініями показуємо їх лише якщо зону вимкнено
+            vis = on and not (name in ("IBH", "IBL") and "IB" in layers)
+            add(vis, name, key.get(name), color, style, width)
     return spec, table, eng
 
 
@@ -297,7 +318,8 @@ def deliver(events, cfg, inst_key, now_et):
 
 # ------------------------------------------------------------------ головна панель
 @st.fragment(run_every=REFRESH)
-def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, basis_override: float, alert_cfg: dict, theme: str):
+def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, basis_override: float, alert_cfg: dict, theme: str,
+             tabs_on: tuple = tuple(TAB_OPTIONS), show_levels_panel: bool = True, chart_h: int = 760, detach: str = "—"):
     inst = C.INSTRUMENTS[inst_key]
     now_et = datetime.now(C.ET)
     now_utc = now_et.astimezone(timezone.utc)
@@ -336,12 +358,15 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
     # VWAP і CVD
     mode_eff = "Globex" if (sess_mode == "RTH" and not key.rth_started) else sess_mode
     sv_disp, px_eng, cvd_eng, vwap = None, None, None, None
+    real_delta = None
+    cvd_exact = False
     if d1et is not None:
-        sv_all = L.session_vwap_cvd(d1et, sess_mode)
+        sv_all = L.session_vwap_cvd(d1et, mode_eff, real_delta)
         sv_disp = L.to_display_tf(sv_all, tf)
-        sv_eng = sv_all if mode_eff == sess_mode else L.session_vwap_cvd(d1et, mode_eff)
+        sv_eng = sv_all
         if not sv_eng.empty:
             cur = sv_eng[sv_eng["sess"] == sv_eng["sess"].iloc[-1]]
+            cvd_exact = bool(cur["exact"].iloc[-1]) if "exact" in cur else False
             if (now_et - cur.index[-1]) < timedelta(minutes=30):
                 cvd_eng, px_eng = cur["cvd"], d1et["Close"].reindex(cur.index)
                 vwap = float(cur["vwap"].iloc[-1])
@@ -377,7 +402,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
     # Рівні
     spec, table_rows, eng_levels = _build_levels(inst, layers, gex, basis, key, vwap, spot, scope)
 
-    # VART Flow і сценарій
+    # Чекпоінти дня і сценарій
     flow = FL.compute_flow(inst=inst, d5=d5_base, kl=key, atr=L.atr20(fd.value if fd.ok else None, key.td), now_et=now_et,
                            px1m=px_eng, cvd1m=cvd_eng, events=events_all, breadth=br_f.value if br_f.ok else None)
     read = E.build_read(
@@ -409,36 +434,80 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
         "macro": (", ".join(f"{k} {v['last']:.2f} ({v['chg_pct']:+.1f}%)" for k, v in (mac_f.value or {}).items()) if mac_f.ok else None),
     }
 
+    # Паперовий журнал сигналів
+    jr = st.session_state.setdefault("journal", {})
+    jr = jr.setdefault(inst.key, J.new_journal())
+    J.update(jr, read["bias"], spot, f"{kyiv:%H:%M}")
+
     # Графік і рівні
     bars = _bars_for_tf(tf, d1et, d5et, fd.value if fd.ok else None)
-    left, right = st.columns([4.3, 1.2], gap="small")
+    left, right = st.columns([4.3, 1.2], gap="small") if show_levels_panel else (st.container(), None)
     with left:
         if bars is None or bars.empty:
             st.error("Немає свічок для обраного таймфрейму.")
         else:
             profile = []
             if "Профіль" in layers and gex is not None and basis is not None:
-                profile = [{"price": G.shift_level(r.strike, basis, inst.tick), "v": float(r.net)} for r in gex.profile.itertuples()]
+                prof_src = gex.mq_profile if len(gex.mq_profile) else gex.profile
+                profile = [{"price": G.shift_level(r.strike, basis, inst.tick), "v": float(r.net)} for r in prof_src.itertuples()]
+            ib = CH.ib_box(bars, key.td, key.get("IBH"), key.get("IBL"), tf)
             html = CH.build_chart_html(
                 title=f"{inst.key}1!  {tf}", key=f"{inst.key}_{tf}", tf=tf, bars=bars, levels=spec, profile=profile,
-                sv=sv_disp, show_vwap="VWAP" in layers, show_cvd="CVD" in layers, theme=theme)
-            render_chart(html, 700)
-    with right:
-        st.markdown('<div class="panel"><div class="ph">Рівні<span class="src">відстань до ціни, п.</span></div>'
-                    + ui.levels_table(table_rows, spot) + "</div>", unsafe_allow_html=True)
+                sv=sv_disp, show_vwap="VWAP" in layers, show_cvd="CVD" in layers, theme=theme, ib=ib,
+                show_ib="IB" in layers, cvd_exact=cvd_exact)
+            render_chart(html, chart_h)
+            if "CVD" in layers and not cvd_exact:
+                st.caption("CVD~ і Delta: оцінка за 1-хвилинними свічками (метод BVC), не точні дані bid/ask. "
+                           "Точна CVD з'являється після підключення тикових даних (ключ Databento у Secrets).")
+    if right is not None:
+        with right:
+            st.markdown(f'<div class="panel" style="max-height:{chart_h}px;overflow:auto"><div class="ph">Рівні<span class="src">відстань до ціни, п.</span></div>'
+                        + ui.levels_table(table_rows, spot) + "</div>", unsafe_allow_html=True)
 
-    st.markdown(ui.flow_card(flow), unsafe_allow_html=True)
-    st.markdown(ui.read_card(read, gex.notes if gex else []), unsafe_allow_html=True)
+    # ---- вкладки з інформаційними панелями
+    upcoming_show = [e for e in events_all if now_utc - timedelta(minutes=30) <= e["ts"] <= now_utc + timedelta(hours=24)]
+    stale = f"застаріло на {ui._dur(news_f.age)}" if news_f.stale else None
+    errs = news_f.value["errors"] if news_f.ok else [news_f.error or ""]
+    mq_rows = [(n, p) for n, p in eng_levels.items() if n not in ("VWAP",) and p is not None]
 
-    col_a, col_b, col_c = st.columns([1.25, 1.1, 1.0], gap="small")
-    with col_a:
+    def tab_summary():
+        st.markdown(ui.summary_cards(gex, read, spot, {}, basis is not None), unsafe_allow_html=True)
+
+    def tab_levels():
+        st.markdown(ui.signal_strip(read, gex, spot, eng_levels.get("MAX PAIN")), unsafe_allow_html=True)
+        c_l, c_r = st.columns([1, 1.25], gap="small")
+        with c_l:
+            st.markdown(ui.levels_signal(mq_rows, spot), unsafe_allow_html=True)
+        with c_r:
+            if gex is not None and len(gex.mq_profile):
+                st.caption("Структура опціонів: Net GEX за страйками ($ млрд/1%)")
+                st.bar_chart(gex.mq_profile.set_index("strike")["net"], height=220)
+            else:
+                st.caption("Структура опціонів недоступна без даних CBOE.")
+            eq = J.equity(jr, spot)
+            st.caption("Паперовий журнал сигналів (поки сторінка відкрита): зміни оцінки за методичкою в пунктах, без комісій.")
+            if len(eq) > 1:
+                st.line_chart(pd.Series(eq, name="Результат, п."), height=140)
+            if jr["trades"]:
+                st.dataframe(pd.DataFrame(jr["trades"][::-1]).rename(columns={"side": "Бік", "t_in": "Вхід", "in": "Ціна входу", "t_out": "Вихід", "out": "Ціна виходу", "pts": "П."}),
+                             hide_index=True, use_container_width=True, height=160)
+            elif jr["open"]:
+                o = jr["open"]
+                st.caption(f"Відкрита: {o['side']} з {o['entry']:.2f} ({o['ts']}).")
+            else:
+                st.caption("Сигналів поки не було.")
+
+    def tab_flow():
+        st.markdown(ui.flow_card(flow), unsafe_allow_html=True)
+
+    def tab_scenario():
+        st.markdown(ui.read_card(read, gex.notes if gex else []), unsafe_allow_html=True)
         st.markdown(ui.scenario_card(read, inst.key), unsafe_allow_html=True)
-    with col_b:
-        upcoming_show = [e for e in events_all if now_utc - timedelta(minutes=30) <= e["ts"] <= now_utc + timedelta(hours=24)]
-        stale = f"застаріло на {ui._dur(news_f.age)}" if news_f.stale else None
-        errs = news_f.value["errors"] if news_f.ok else [news_f.error or ""]
+
+    def tab_news():
         st.markdown(ui.news_card(news_sel or [], upcoming_show, now_utc, errs, stale), unsafe_allow_html=True)
-    with col_c:
+
+    def tab_macro():
         yard_f = data.yardeni_charts()
         ynote = ("Графіки Yardeni (прогнозні EPS і маржа) нижче." if yard_f.ok
                  else "Yardeni не віддав графіки автоматично, відкрийте сторінку за посиланням нижче.")
@@ -453,22 +522,44 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
                 for ch in yard_f.value:
                     st.image(ch["img"], caption=ch["page"], use_container_width=True)
 
-    st.markdown('<div style="height:2px"></div><div class="muted" style="font:600 13px var(--sans);margin:6px 0 4px">'
-                f'Gamma за базовими активами ({scope})</div>', unsafe_allow_html=True)
-    chains = data.panel_chains()
-    cols = [_gex_panel_col(name, chains[name], now_et, scope) for name, _ in C.PANEL_CHAINS]
-    st.markdown(ui.compare_panel(cols), unsafe_allow_html=True)
+    def tab_compare():
+        st.caption(f"Gamma за базовими активами ({scope})")
+        chains = data.panel_chains()
+        cols = [_gex_panel_col(name, chains[name], now_et, scope) for name, _ in C.PANEL_CHAINS]
+        st.markdown(ui.compare_panel(cols), unsafe_allow_html=True)
+
+    widgets = {"Підсумок": tab_summary, "Рівні й сигнал": tab_levels, "Чекпоінти дня": tab_flow, "Сценарій": tab_scenario,
+               "Новини": tab_news, "Глобальний ринок": tab_macro, "Gamma за активами": tab_compare}
+    shown = [t for t in TAB_OPTIONS if t in tabs_on]
+    if shown:
+        for t, box in zip(shown, st.tabs(shown)):
+            with box:
+                widgets[t]()
+    else:
+        st.info("Усі вкладки приховано. Увімкніть їх у «Вікна й макет».")
+    if detach in widgets:
+        _detached(detach, widgets[detach])
+
     st.markdown('<p class="muted" style="font:400 11px var(--sans);margin-top:10px">GEX рахується за відкритим інтересом CBOE '
                 '(затримка ~15 хв) і поточною ціною; конвенція: дилери довгі кол-опціони й короткі пут-опціони. '
-                'CVD оцінюється за 1-хвилинними свічками без окремих угод. Графік: TradingView Lightweight Charts™.</p>',
+                'Назви рівнів за схемою MenthorQ; розрахунок власний, не копія їхніх даних. Графік: TradingView Lightweight Charts™.</p>',
                 unsafe_allow_html=True)
+
+
+def _detached(name: str, render) -> None:
+    """Спливне вікно з вибраною вкладкою."""
+    @st.dialog(name, width="large")
+    def _dlg():
+        render()
+    _dlg()
 
 
 def fmt_pct(v):
     return "н/д" if v is None else f"{v:+.2f}%"
 
 
-terminal(inst_key, tf, scope, sess_mode, tuple(layers), basis_override, alert_cfg, theme_type())
+terminal(inst_key, tf, scope, sess_mode, tuple(layers), basis_override, alert_cfg, theme_type(), tuple(tabs_on),
+         show_levels_panel, chart_h, detach)
 
 with st.expander("Налаштування"):
     st.number_input(

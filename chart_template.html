@@ -17,7 +17,11 @@
   #legend b { color: var(--fg); font-weight: 500; }
   #legend .t { font: 600 13px 'IBM Plex Sans', system-ui, sans-serif; color: var(--fg); margin-right: 8px; }
   #legend .up { color: #26a69a; } #legend .dn { color: #ef5350; }
-  #tools { position: absolute; left: 10px; bottom: 44px; z-index: 6; display: flex; gap: 6px; }
+  #tools { position: absolute; left: 10px; bottom: 44px; z-index: 6; display: flex; gap: 6px; align-items: center; }
+  #tools label { display: inline-flex; align-items: center; gap: 5px; color: var(--btnfg); font: 500 11px 'IBM Plex Sans', system-ui, sans-serif;
+                 background: var(--btnbg); border: 1px solid var(--btnbd); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+  #tools input[type=color] { width: 18px; height: 18px; padding: 0; border: 0; background: none; cursor: pointer; }
+  #tools input[type=checkbox] { margin: 0; cursor: pointer; }
   #tools button {
     background: var(--btnbg); color: var(--btnfg); border: 1px solid var(--btnbd); border-radius: 4px; cursor: pointer;
     font: 500 11px 'IBM Plex Sans', system-ui, sans-serif; padding: 4px 9px;
@@ -32,7 +36,8 @@
 <div id="wrap">
   <div id="chart"></div>
   <div id="legend"></div>
-  <div id="tools"><button id="btn-fit" title="Повернутися до поточного часу">До поточного</button><button id="btn-reset" title="Скинути масштаб">Скинути</button></div>
+  <div id="tools"><button id="btn-fit" title="Повернутися до поточного часу">До поточного</button><button id="btn-reset" title="Скинути масштаб">Скинути</button>
+    <label id="ib-ctl" title="Показати/сховати зону Initial Balance і змінити колір" style="display:none"><input type="checkbox" id="ib-on"> IB <input type="color" id="ib-col" value="#4c8dff"></label></div>
   <div id="err"></div>
 </div>
 <script>__LIB__</script>
@@ -73,7 +78,7 @@
       vertLine: { color: T.cross, labelBackgroundColor: dark ? '#1e2a3f' : '#42506b' },
       horzLine: { color: T.cross, labelBackgroundColor: dark ? '#1e2a3f' : '#42506b' },
     },
-    rightPriceScale: { borderColor: T.line, scaleMargins: { top: 0.06, bottom: 0.14 } },
+    rightPriceScale: { borderColor: T.line, scaleMargins: { top: 0.06, bottom: 0.08 } },
     timeScale: { borderColor: T.line, timeVisible: !P.daily, secondsVisible: false, rightOffset: 14, barSpacing: P.bar_spacing || 7, minBarSpacing: 1.5 },
     localization: { priceFormatter: (p) => p.toFixed(2) },
     handleScale: { axisPressedMouseMove: { time: true, price: true }, mouseWheel: true, pinch: true },
@@ -87,12 +92,6 @@
     priceFormat: { type: 'price', precision: 2, minMove: 0.25 },
   }, 0);
   candles.setData(P.candles);
-
-  const vol = chart.addSeries(LW.HistogramSeries, {
-    priceFormat: { type: 'volume' }, priceScaleId: 'vol', lastValueVisible: false, priceLineVisible: false,
-  }, 0);
-  vol.priceScale().applyOptions({ scaleMargins: { top: 0.88, bottom: 0 } });
-  vol.setData(P.volume);
 
   // ---- VWAP (сесійний) з ±1σ
   (P.vwap || []).forEach((s) => {
@@ -117,27 +116,80 @@
     });
   });
 
-  // ---- GEX-профіль, намальований прямо на шкалі цін (рухається разом із графіком)
+  // ---- Зона Initial Balance: напівпрозорий прямокутник між IBL і IBH
+  const IBK = 'ashelper:ib';
+  let ibState = { on: true, color: '#4c8dff' };
+  try { const sv = JSON.parse(localStorage.getItem(IBK) || 'null'); if (sv) ibState = Object.assign(ibState, sv); } catch (e) {}
+  const hexA = (hex, a) => { const m = /#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(hex) || []; return `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${a})`; };
+  class IbRenderer {
+    constructor(src) { this.s = src; }
+    draw(target) {
+      const s = this.s;
+      if (!s.ib || !ibState.on || !s.series) return;
+      const ts = chart.timeScale();
+      const x0 = ts.timeToCoordinate(s.ib.t0), x1 = ts.timeToCoordinate(s.ib.t1);
+      const yh = s.series.priceToCoordinate(s.ib.hi), yl = s.series.priceToCoordinate(s.ib.lo);
+      if (yh == null || yl == null) return;
+      target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
+        const xa = x0 == null ? 0 : x0, xb = (x1 == null ? mediaSize.width : x1) + 8;
+        ctx.fillStyle = hexA(ibState.color, 0.16);
+        ctx.fillRect(xa, Math.min(yh, yl), xb - xa, Math.abs(yl - yh));
+        ctx.strokeStyle = hexA(ibState.color, 0.65); ctx.lineWidth = 1;
+        ctx.strokeRect(xa + 0.5, Math.min(yh, yl) + 0.5, xb - xa, Math.abs(yl - yh));
+        ctx.fillStyle = hexA(ibState.color, 0.95); ctx.font = "600 10px 'IBM Plex Sans', sans-serif";
+        ctx.fillText('IB', xa + 4, Math.min(yh, yl) + 12);
+      });
+    }
+  }
+  class IbView { constructor(s) { this.s = s; } zOrder() { return 'bottom'; } renderer() { return new IbRenderer(this.s); } }
+  class IbPrimitive {
+    constructor(ib) { this.ib = ib; this.series = null; this.req = null; }
+    attached(p) { this.series = p.series; this.req = p.requestUpdate; }
+    detached() { this.series = null; }
+    updateAllViews() {}
+    paneViews() { return [new IbView(this)]; }
+    refresh() { if (this.req) this.req(); }
+  }
+  let ibPrim = null;
+  if (P.ib_available) {
+    const ctl = document.getElementById('ib-ctl'); ctl.style.display = 'inline-flex';
+    const on = document.getElementById('ib-on'), col = document.getElementById('ib-col');
+    on.checked = ibState.on; col.value = ibState.color;
+    const save = () => { try { localStorage.setItem(IBK, JSON.stringify(ibState)); } catch (e) {} if (ibPrim) ibPrim.refresh(); };
+    on.onchange = () => { ibState.on = on.checked; save(); };
+    col.oninput = () => { ibState.color = col.value; save(); };
+    if (P.ib) { try { ibPrim = new IbPrimitive(P.ib); candles.attachPrimitive(ibPrim); } catch (e) { console.warn('ib primitive failed', e); } }
+  }
+
+  // ---- Net GEX by strike: горизонтальні стовпчики від правого краю, підписи страйків
   class ProfileRenderer {
     constructor(src) { this.s = src; }
     draw(target) {
       const s = this.s;
       if (!s.series || !s.rows.length) return;
       target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
-        const W = mediaSize.width, maxW = Math.min(170, W * 0.17);
+        const W = mediaSize.width, maxW = Math.min(190, W * 0.19);
         const ys = s.rows.map((r) => s.series.priceToCoordinate(r.price));
         let step = 6;
         for (let i = 1; i < ys.length; i++) {
           if (ys[i] != null && ys[i - 1] != null) { step = Math.abs(ys[i] - ys[i - 1]); break; }
         }
         const h = Math.max(2, Math.min(step - 1, 14));
+        const top = [...s.rows].sort((a, b) => Math.abs(b.v) - Math.abs(a.v)).slice(0, 6).map((r) => r.price);
+        ctx.font = "500 10px 'IBM Plex Mono', monospace";
         s.rows.forEach((r, i) => {
           const y = ys[i];
           if (y == null) return;
           const w = Math.max(1, Math.abs(r.v) / s.max * maxW);
-          ctx.fillStyle = r.v >= 0 ? 'rgba(47,212,160,0.38)' : 'rgba(242,86,107,0.38)';
+          ctx.fillStyle = r.v >= 0 ? 'rgba(47,212,160,0.45)' : 'rgba(242,86,107,0.45)';
           ctx.fillRect(W - w, y - h / 2, w, h);
+          if (h >= 7 && top.includes(r.price)) {
+            ctx.fillStyle = T.fg; ctx.textAlign = 'right';
+            ctx.fillText((r.v >= 0 ? '+' : '') + r.v.toFixed(2) + 'B', W - w - 4, y + 3.5);
+          }
         });
+        ctx.textAlign = 'right'; ctx.fillStyle = T.muted; ctx.font = "600 10px 'IBM Plex Sans', sans-serif";
+        ctx.fillText('NET GEX BY STRIKE ($B/1%)', W - 6, 14);
       });
     }
   }
@@ -163,25 +215,37 @@
     if (a >= 1e3) return sg + (a / 1e3).toFixed(1) + 'K';
     return sg + a.toFixed(0);
   };
-  // ---- CVD (панель 1, окремі лінії на кожну сесію, тому скидання видно)
-  let lastCvd = null;
+  // ---- Нижні панелі: CVD (лінія, скидання на кожній сесії), Delta і Volume (як у NinjaTrader/Sierra)
+  let pane = 1, lastCvd = null;
+  const stretch = [3.6];
   if (P.cvd && P.cvd.length) {
     P.cvd.forEach((data, i) => {
       const isLast = i === P.cvd.length - 1;
       const l = chart.addSeries(LW.LineSeries, {
         color: isLast ? '#6aa9ff' : 'rgba(106,169,255,0.4)', lineWidth: isLast ? 2 : 1,
         priceFormat: { type: 'custom', minMove: 1, formatter: fmtVol }, lastValueVisible: isLast, priceLineVisible: false,
-        crosshairMarkerVisible: false, title: isLast ? 'CVD' : '',
-      }, 1);
+        crosshairMarkerVisible: false, title: isLast ? (P.cvd_exact ? 'CVD' : 'CVD~') : '',
+      }, pane);
       l.setData(data);
       if (isLast) lastCvd = l;
     });
     if (lastCvd) lastCvd.createPriceLine({ price: 0, color: T.sep, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
-    try {
-      const panes = chart.panes();
-      if (panes[1]) { panes[0].setStretchFactor(3.4); panes[1].setStretchFactor(1); }
-    } catch (e) { console.warn('pane sizing failed', e); }
+    stretch.push(1.1); pane += 1;
+    if (P.delta && P.delta.length) {
+      const dl = chart.addSeries(LW.HistogramSeries, {
+        priceFormat: { type: 'custom', minMove: 1, formatter: fmtVol }, lastValueVisible: true, priceLineVisible: false, title: 'Delta',
+      }, pane);
+      dl.setData(P.delta); stretch.push(0.7); pane += 1;
+    }
   }
+  const vs = chart.addSeries(LW.HistogramSeries, {
+    priceFormat: { type: 'custom', minMove: 1, formatter: fmtVol }, lastValueVisible: true, priceLineVisible: false, title: 'Vol',
+  }, pane);
+  vs.setData(P.volume); stretch.push(0.7);
+  try {
+    const panes = chart.panes();
+    stretch.forEach((f, i) => { if (panes[i]) panes[i].setStretchFactor(f); });
+  } catch (e) { console.warn('pane sizing failed', e); }
 
   // ---- Легенда
   const legend = document.getElementById('legend');
@@ -202,7 +266,7 @@
   });
 
   // ---- Масштаб: зберігаємо відносно останньої свічки, щоб автооновлення не скидало перегляд
-  const KEY = 'vart:view:' + P.key;
+  const KEY = 'ashelper:view:' + P.key;
   const lastIdx = P.candles.length - 1;
   const defRange = () => ({ from: Math.max(0, lastIdx - P.default_bars), to: lastIdx + 14 });
   let range = defRange();

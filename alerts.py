@@ -1,4 +1,4 @@
-"""Сповіщення: ціна біля рівня, зміна кроку VART Flow, великий обсяг, важлива новина, подія календаря.
+"""Сповіщення: ціна біля рівня, зміна кроку Чекпоінти дня, великий обсяг, важлива новина, подія календаря.
 
 Оцінка чиста (без Streamlit): evaluate(state, snap, cfg) повертає події й новий стан, тому її легко тестувати.
 Доставка: у застосунку (toast + журнал) і/або Telegram. Сповіщення працюють, поки відкрита вкладка зі сторінкою.
@@ -15,13 +15,13 @@ import config as C
 
 ALERT_TYPES = {
     "level": "Ціна біля рівня",
-    "flow": "VART Flow: крок змінився",
+    "flow": "Чекпоінти дня: крок змінився",
     "volume": "Великий обсяг (оцінка по 1m)",
     "news": "Важлива новина",
     "event": "Подія календаря (за 15 хв)",
 }
 CHANNELS = {"app": "У застосунку", "telegram": "Telegram"}
-DEFAULT_LEVELS = ["CALL WALL", "PUT WALL", "FLIP", "PDH", "PDL", "OVNH", "OVNL", "IBH", "IBL", "VWAP", "NYM"]
+DEFAULT_LEVELS = ["Call Resistance", "Put Support", "HVL", "PDH", "PDL", "OVNH", "OVNL", "IBH", "IBL", "VWAP", "NYM"]
 
 
 def default_config() -> dict:
@@ -81,7 +81,7 @@ def evaluate(state: dict | None, snap: dict, cfg: dict) -> tuple[list[Event], di
             elif not armed and dist >= 2 * thr:
                 st["armed"][name] = True
 
-    # --- VART Flow: зміна статусу кроків і сценарію
+    # --- Чекпоінти дня: зміна статусу кроків і сценарію
     prev = st["flow"]
     cur = snap.get("flow_steps") or {}
     if enabled(cfg, "flow") and not first:
@@ -89,10 +89,10 @@ def evaluate(state: dict | None, snap: dict, cfg: dict) -> tuple[list[Event], di
             old = prev.get(key)
             if old and old != status and status in ("done", "fail"):
                 verdict = "підтверджено" if status == "done" else "не спрацювало"
-                events.append(Event("flow", f"VART: {title}", f"{title}: {verdict}. {text}", f"fl:{key}:{status}:{now}"))
+                events.append(Event("flow", f"Методичка: {title}", f"{title}: {verdict}. {text}", f"fl:{key}:{status}:{now}"))
         sc = snap.get("flow_scenario")
         if sc and st.get("scenario") and sc != st["scenario"] and "попередньо" not in sc:
-            events.append(Event("flow", "VART: сценарій", sc, f"sc:{_h(sc)}"))
+            events.append(Event("flow", "Методичка: сценарій", sc, f"sc:{_h(sc)}"))
     st["flow"] = {k: v[1] for k, v in cur.items()}
     if snap.get("flow_scenario"):
         st["scenario"] = snap["flow_scenario"]

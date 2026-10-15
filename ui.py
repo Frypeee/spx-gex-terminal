@@ -101,7 +101,7 @@ def scenario_card(read: dict, inst_key: str) -> str:
     strength = {"слабкий": "слабка перевага", "помірний": "помірна перевага", "сильний": "сильна перевага"}[read["strength"]]
     pos = max(4.0, min(96.0, 50 + read["score"] * 7))
     plan = read["plan"]
-    tip_txt = ("Зведення факторів: гамма дилерів, VWAP, сценарій VART, потік ордерів, новини, макро. "
+    tip_txt = ("Зведення факторів: гамма дилерів, VWAP, сценарій за методичкою, потік ордерів, новини, макро. "
                "Це підказка для рішення, а не сигнал на вхід.")
     parts = [f'<div class="panel"><div class="ph">Сценарій сесії{q("", text=tip_txt)}'
              f'<span class="src">{esc(read["phase_text"])}</span></div>']
@@ -131,7 +131,7 @@ def read_card(read: dict, notes: list[str]) -> str:
             f'<p>{esc(read["paragraph"])}</p>{extra}</div>')
 
 
-# ---------------------------------------------------------------- VART Flow
+# ---------------------------------------------------------------- Чекпоінти дня
 _IC = {"done": "✓", "active": "●", "fail": "✕", "wait": "·", "skip": "–"}
 
 
@@ -165,10 +165,10 @@ def _step_row(st) -> str:
 
 
 def flow_card(fl) -> str:
-    """Віджет «VART Flow»: підсумок зліва, нумерована гілка кроків справа (активний крок один)."""
-    tip_txt = ("Покроковий чекліст плейбука VART. Кроки йдуть за часом зверху вниз: ✓ пройдено, ● зараз, "
+    """Віджет «Чекпоінти дня»: підсумок зліва, нумерована гілка кроків справа (активний крок один)."""
+    tip_txt = ("Покроковий чекліст методички. Кроки йдуть за часом зверху вниз: ✓ пройдено, ● зараз, "
                "· далі, ✕ не підтвердилось. Умови перевіряються автоматично.")
-    parts = [f'<div class="panel"><div class="ph">VART Flow{q("", text=tip_txt)}'
+    parts = [f'<div class="panel"><div class="ph">Чекпоінти дня{q("", text=tip_txt)}'
              '<span class="src">кроки перевіряються автоматично</span></div><div class="vf">']
     parts.append('<div class="vf-sum">')
     parts.append(f'<div class="lbl">Сценарій</div><div class="big">{esc(fl.scenario)}</div>')
@@ -228,7 +228,7 @@ def _fng_color(s: float) -> str:
 
 def macro_card(macro: dict | None, fng: dict | None, sectors: pd.DataFrame | None, ms_notes: list[str],
                yardeni_note: str) -> str:
-    parts = ['<div class="panel"><div class="ph">Макрофон<span class="src">Yahoo, CNN, SPDR</span></div>']
+    parts = ['<div class="panel"><div class="ph">Глобальний ринок<span class="src">Yahoo, CNN, SPDR</span></div>']
     if macro:
         parts.append('<div class="kpi">')
         for name in ("VIX", "US10Y", "Oil", "DXY"):
@@ -275,8 +275,8 @@ def compare_panel(cols: list[dict]) -> str:
             continue
         pos = c["net"] >= 0
         pill = '<span class="pill pos">Позитивна гамма</span>' if pos else '<span class="pill neg">Негативна гамма</span>'
-        rows = [("Spot (затримка)", fmt(c["spot"], 2), ""), ("Call wall", fmt(c["call"], 0), "CALL WALL"), ("Put wall", fmt(c["put"], 0), "PUT WALL"),
-                ("Gamma flip", fmt(c["flip"], 0) if c["flip"] else "не визначено", "FLIP"), ("Max pain", fmt(c["pain"], 0), "MAX PAIN"),
+        rows = [("Spot (затримка)", fmt(c["spot"], 2), ""), ("Call wall", fmt(c["call"], 0), "Call Resistance"), ("Put wall", fmt(c["put"], 0), "Put Support"),
+                ("Gamma flip", fmt(c["flip"], 0) if c["flip"] else "не визначено", "HVL"), ("Max pain", fmt(c["pain"], 0), "MAX PAIN"),
                 ("Pin strike", fmt(c["pin"], 0) if c["pin"] else "н/д", "PIN"),
                 ("Net dealer GEX", f'{"+" if pos else "−"}${abs(c["net"]):.2f}B', "Гамма дилерів")]
         parts.append(f'<div class="col"><div class="hd"><b>{esc(c["name"])}</b>{pill}</div>'
@@ -293,3 +293,85 @@ def alert_log(items: list[dict]) -> str:
         out.append(f'<div class="it"><span class="tm">{esc(it["t"])}</span><b>{esc(it["title"])}</b><br>{esc(it["text"])}</div>')
     out.append("</div>")
     return "".join(out)
+
+
+# ---------------------------------------------------------------- Підсумок (мінімалістичні картки)
+def _card(title: str, body: str, tip: str = "") -> str:
+    return f'<div class="sc"><div class="sct">{esc(title)}{q("", text=tip) if tip else ""}</div>{body}</div>'
+
+
+def summary_cards(gex, read: dict | None, spot: float, mq_fut: dict, basis_ok: bool) -> str:
+    """Вкладка «Підсумок»: режим, очікуваний рух, позиціонування дилерів, GEX за терміном, пут/кол, скос."""
+    if gex is None:
+        return '<div class="panel"><p class="muted">Немає даних опціонів CBOE: підсумок недоступний.</p></div>'
+    sm = gex.summary
+    pos = gex.net_total_b >= 0
+    hvl = gex.mq.get("HVL")
+    above = hvl is not None and gex.spot >= hvl
+    regime = "Позитивна гамма" if pos else "Негативна гамма"
+    regime_sub = ("дилери гасять рух: діапазон, повернення до середнього" if pos
+                  else "дилери підсилюють рух: тренд, прискорення")
+    hvl_txt = ("" if hvl is None else f"Ціна {'вище' if above else 'нижче'} HVL {fmt(hvl, 0)}")
+    cards = [_card("Режим", f'<div class="big {"up" if pos else "dn"}">{regime}</div><div class="sub">{regime_sub}</div>'
+                   f'<div class="sub">{hvl_txt}</div>', "Знак сумарної гамми дилерів при поточній ціні.")]
+    if gex.em_1d:
+        em = gex.em_1d
+        cards.append(_card("Очікуваний рух (1D)",
+                           f'<div class="big">±{em:.1f} п.</div><div class="sub">±{em / gex.spot * 100:.2f}% · '
+                           f'{fmt(gex.spot - em, 0)} – {fmt(gex.spot + em, 0)}</div>'
+                           f'<div class="sub">ATM IV {gex.atm_iv * 100:.1f}%</div>', "1σ за імпліцитною волатильністю найближчої експірації."))
+    cards.append(_card("Позиціонування дилерів",
+                       f'<div class="big {"up" if pos else "dn"}">{gex.net_total_b:+.2f}B</div>'
+                       f'<div class="sub">Calls {sm["call_b"]:.1f}B · Puts {sm["put_b"]:.1f}B (усі експірації)</div>'
+                       f'<div class="sub">чисте за обраним діапазоном: {gex.net_total_b:+.2f}B на 1%</div>',
+                       "Дилери довгі кол і короткі пут (модельна конвенція). $ млрд зміни дельти-хеджу на 1% руху."))
+    mx = max(1e-9, max(abs(v) for v in sm["by_dte"].values()))
+    rows = "".join(
+        f'<div class="bar-row"><span>{k}</span><span class="bar"><i style="width:{abs(v) / mx * 100:.0f}%;'
+        f'background:{"var(--put)" if v >= 0 else "var(--call)"}"></i></span><span class="mono">{v:+.2f}B</span></div>'
+        for k, v in sm["by_dte"].items())
+    cards.append(_card("GEX за терміном до експірації", rows, "Звідки береться гамма: сьогоднішні опціони чи віддалені."))
+    pc = sm.get("pc_oi")
+    pcv = sm.get("pc_vol")
+    pc_txt = "н/д" if pc is None else f"{pc:.2f}"
+    pcv_txt = "н/д" if not pcv else f"{pcv:.2f}"
+    cards.append(_card("Put/Call", f'<div class="big">{pc_txt}</div><div class="sub">за відкритим інтересом</div>'
+                       f'<div class="sub">за обсягом сьогодні: {pcv_txt}</div>',
+                       "Вище 1 більше путів. Це контекст настроїв, а не сигнал."))
+    sk = sm.get("skew")
+    cards.append(_card("Скос (skew)", f'<div class="big">{"н/д" if sk is None else f"{sk:+.1f} п.в."}</div>'
+                       '<div class="sub">IV путу 95% мінус IV колу 105%</div>',
+                       "Чим більший скос, тим дорожче ринок платить за захист від падіння."))
+    if read:
+        lab = {"LONG": "Лонг", "SHORT": "Шорт", "WAIT": "Без переваги"}[read["bias"]]
+        cards.append(_card("Оцінка за методичкою", f'<div class="big">{lab}</div><div class="sub">{esc(read["strength"])} · бал {read["score"]:+.1f}</div>',
+                           "Підсумок усіх факторів сторінки. Це контекст для рішення, не сигнал на вхід."))
+    return '<div class="sg">' + "".join(cards) + "</div>"
+
+
+# ---------------------------------------------------------------- Рівні й сигнал (монітор у стилі GC LIVE)
+def signal_strip(read: dict, gex, spot: float, pain: float | None) -> str:
+    bias = read["bias"]
+    cls = {"LONG": "long", "SHORT": "short", "WAIT": "wait"}[bias]
+    label = {"LONG": "LONG", "SHORT": "SHORT", "WAIT": "WAIT"}[bias]
+    pc = gex.summary.get("pc_oi") if gex else None
+    cells = [("Bias", f'<span class="b {cls}">{label}</span>'),
+             ("Net GEX", "н/д" if gex is None else f"{gex.net_total_b:+.2f}B"),
+             ("Put/Call", "н/д" if pc is None else f"{pc:.2f}"),
+             ("Max pain", "н/д" if pain is None else fmt(pain, 0)),
+             ("Ціна", fmt(spot))]
+    inner = "".join(f'<div><div class="l">{k}</div><div class="v">{v}</div></div>' for k, v in cells)
+    return (f'<div class="strip bias-{cls}">{inner}</div>'
+            f'<div class="sumline">{esc(read["plan"].get("summary", ""))}</div>')
+
+
+def levels_signal(rows: list[tuple[str, float]], spot: float) -> str:
+    """Рівні за відстанню від ціни: над ціною SHORT-зона (опір), під ціною LONG-зона (підтримка)."""
+    out = ['<div class="lsr h"><span>Рівень</span><span>Ціна</span><span>Відстань</span><span>Сторона</span></div>']
+    for name, price in sorted(rows, key=lambda r: -r[1]):
+        d = price - spot
+        side = "SHORT" if d > 0 else "LONG"
+        cls = "short" if d > 0 else "long"
+        out.append(f'<div class="lsr"><span>{esc(name)}</span><span class="mono">{fmt(price)}</span>'
+                   f'<span class="mono">{d:+.1f}</span><span class="tag {cls}">{side}</span></div>')
+    return '<div class="panel">' + "".join(out) + "</div>"
