@@ -59,6 +59,9 @@ def theme_type() -> str:
 
 OANDA_TOKEN, OANDA_ENV = secret("OANDA_TOKEN"), secret("OANDA_ENV", "practice")
 ANTHROPIC_KEY = secret("ANTHROPIC_API_KEY")
+UPSTASH_URL, UPSTASH_TOKEN = secret("UPSTASH_URL"), secret("UPSTASH_TOKEN")
+DATABENTO_KEY = secret("DATABENTO_API_KEY")
+FRED_KEY = secret("FRED_API_KEY")
 TG_TOKEN, TG_CHAT = secret("TELEGRAM_BOT_TOKEN"), secret("TELEGRAM_CHAT_ID")
 
 
@@ -358,7 +361,9 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
     # VWAP і CVD
     mode_eff = "Globex" if (sess_mode == "RTH" and not key.rth_started) else sess_mode
     sv_disp, px_eng, cvd_eng, vwap = None, None, None, None
-    real_delta = None
+    real_delta = data.real_delta(inst.key, UPSTASH_URL, UPSTASH_TOKEN)
+    if real_delta is None:
+        real_delta = data.databento_delta(inst.key, DATABENTO_KEY, now_utc)
     cvd_exact = False
     if d1et is not None:
         sv_all = L.session_vwap_cvd(d1et, mode_eff, real_delta)
@@ -374,6 +379,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
     # Новини, календар, макро
     news_f, cal_f = data.news_items(), data.calendar_events()
     fng_f, sec_f, mac_f = data.fear_greed(), data.sector_performance(), data.macro_snapshot()
+    fred_f = data.fred_snapshot(FRED_KEY) if FRED_KEY else None
     br_f = data.breadth_snapshot()
     news_sel = N.select_news(news_f.value["items"], now_utc) if news_f.ok else None
     events_all = cal_f.value if cal_f.ok else []
@@ -458,7 +464,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
             render_chart(html, chart_h)
             if "CVD" in layers and not cvd_exact:
                 st.caption("CVD~ і Delta: оцінка за 1-хвилинними свічками (метод BVC), не точні дані bid/ask. "
-                           "Точна CVD з'являється після підключення тикових даних (ключ Databento у Secrets).")
+                           "Точна CVD з'являється після підключення тикових даних (ключ DATABENTO_API_KEY у Secrets).")
     if right is not None:
         with right:
             st.markdown(f'<div class="panel" style="max-height:{chart_h}px;overflow:auto"><div class="ph">Рівні<span class="src">відстань до ціни, п.</span></div>'
@@ -512,7 +518,8 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
         ynote = ("Графіки Yardeni (прогнозні EPS і маржа) нижче." if yard_f.ok
                  else "Yardeni не віддав графіки автоматично, відкрийте сторінку за посиланням нижче.")
         st.markdown(ui.macro_card(mac_f.value if mac_f.ok else None, fng_f.value if fng_f.ok else None,
-                                  sec_f.value if sec_f.ok else None, [], ynote), unsafe_allow_html=True)
+                                  sec_f.value if sec_f.ok else None, [], ynote,
+                                  fred=(fred_f.value if fred_f and fred_f.ok else None)), unsafe_allow_html=True)
         with st.expander("Yardeni, SSGA, CNN: джерела"):
             for title, url in C.YARDENI_PAGES:
                 st.link_button(f"Yardeni: {title}", url, use_container_width=True)

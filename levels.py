@@ -91,7 +91,8 @@ def session_vwap_cvd(d1: pd.DataFrame, mode: str = "RTH", real: pd.DataFrame | N
     if real is not None and not real.empty:
         r = real.reindex(d.index)
         have = r["buy"].notna().to_numpy()
-        if have.mean() > 0.8:
+        cur = (d['td'] == d['td'].iloc[-1]).to_numpy()
+        if have[cur].mean() > 0.8:
             delta = np.where(have, (r["buy"].fillna(0) - r["sell"].fillna(0)).to_numpy(float), delta)
             exact = True
 

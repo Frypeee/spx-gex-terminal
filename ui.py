@@ -227,8 +227,8 @@ def _fng_color(s: float) -> str:
 
 
 def macro_card(macro: dict | None, fng: dict | None, sectors: pd.DataFrame | None, ms_notes: list[str],
-               yardeni_note: str) -> str:
-    parts = ['<div class="panel"><div class="ph">Глобальний ринок<span class="src">Yahoo, CNN, SPDR</span></div>']
+               yardeni_note: str, fred: dict | None = None) -> str:
+    parts = ['<div class="panel"><div class="ph">Глобальний ринок<span class="src">Yahoo, FRED, CNN, SPDR</span></div>']
     if macro:
         parts.append('<div class="kpi">')
         for name in ("VIX", "US10Y", "Oil", "DXY"):
@@ -242,6 +242,16 @@ def macro_card(macro: dict | None, fng: dict | None, sectors: pd.DataFrame | Non
         parts.append("</div>")
     else:
         parts.append('<p class="muted">VIX, дохідність, нафта, долар: джерело недоступне.</p>')
+    if fred:
+        parts.append('<div class="kpi">')
+        for name in ("US2Y", "US10Y", "2s10s", "HY spread"):
+            m = fred.get(name)
+            if not m:
+                continue
+            cls = "up" if m["chg"] >= 0 else "dn"
+            parts.append(f'<div><div class="l">{name}</div><div class="v">{m["last"]:.2f}%</div>'
+                         f'<div class="c {cls}">{m["chg"]:+.2f} · {esc(m["date"][5:])}</div></div>')
+        parts.append("</div>")
     if fng:
         s = fng["score"]
         prev = fng.get("prev_close")
