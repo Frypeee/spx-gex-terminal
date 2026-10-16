@@ -179,3 +179,6 @@ header[data-testid="stHeader"] { background: transparent; }
 [data-testid="stColumn"], [data-testid="stHorizontalBlock"] > div { min-width:0 !important; }
 [data-testid="stTabs"] [role="tabpanel"] { padding-top:10px; }
 .strip .b { font:700 17px var(--mono); } .strip .b.long { color:var(--put); } .strip .b.short { color:var(--call); } .strip .b.wait { color:var(--pain); }
+
+/* невидимий фрейм з даними для графіка (не займає місця і не дає проміжку) */
+div[data-testid="stElementContainer"]:has(iframe[srcdoc*="ASHDATAFRAME"]) { position: absolute !important; width: 0 !important; height: 0 !important; overflow: hidden !important; margin: 0 !important; padding: 0 !important; }

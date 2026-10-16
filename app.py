@@ -64,6 +64,7 @@ ANTHROPIC_KEY = secret("ANTHROPIC_API_KEY")
 UPSTASH_URL, UPSTASH_TOKEN = secret("UPSTASH_URL"), secret("UPSTASH_TOKEN")
 DATABENTO_KEY = secret("DATABENTO_API_KEY")
 FRED_KEY = secret("FRED_API_KEY")
+LSE_BROWSER_KEY = secret("LSE_BROWSER_KEY")      # необов'язково: живі тики LSE прямо в браузері
 TG_TOKEN, TG_CHAT = secret("TELEGRAM_BOT_TOKEN"), secret("TELEGRAM_CHAT_ID")
 
 
@@ -189,7 +190,7 @@ if E.session_phase(datetime.now(C.ET))[0] == "closed":
 
 
 # ------------------------------------------------------------------ допоміжні
-def render_chart(html: str, height: int) -> None:
+def render_chart(html: str, height: int, hidden: bool = False) -> None:
     """st.iframe у нових версіях Streamlit; components.html як запасний варіант для старих."""
     if hasattr(st, "iframe"):
         st.iframe(html, height=height)
@@ -484,14 +485,22 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
                                     "zc": float(z.call) if z is not None else 0.0,
                                     "zp": float(z.put) if z is not None else 0.0})
             ib = CH.ib_box(bars, key.td, key.get("IBH"), key.get("IBL"), tf)
-            html = CH.build_chart_html(
+            lse_sym = (data._BRIDGE_META.get(inst.key) or {}).get("sym") if str(feed.source).startswith("LSE") else None
+            ch_kw = dict(
                 title=f"{inst.key}1!  {tf}", key=f"{inst.key}_{tf}", tf=tf, bars=bars, levels=spec, profile=profile,
                 sv=sv_disp, show_vwap="VWAP" in layers, show_cvd="CVD" in layers, theme=theme, ib=ib,
-                show_ib="IB" in layers, cvd_exact=cvd_exact)
-            render_chart(html, chart_h)
-            if "CVD" in layers and not cvd_exact:
+                show_ib="IB" in layers, cvd_exact=cvd_exact,
+                live={"key": LSE_BROWSER_KEY, "symbol": lse_sym} if (LSE_BROWSER_KEY and lse_sym) else None)
+            stub, blob = CH.build_chart_parts(f"{inst.key}_{tf}", **ch_kw)
+            render_chart(stub, chart_h)      # сторінка графіка стабільна: браузер її не перезавантажує
+            render_chart(blob, 1, hidden=True)   # невидимий фрейм: передає свіжі дані в графік
+            if "CVD" in layers and not cvd_exact and real_delta is not None and len(real_delta):
+                t0 = real_delta.index.min().tz_convert(C.KYIV)
+                st.caption(f"CVD~: до {t0:%d.%m %H:%M} (Київ) оцінка за свічками (BVC), далі за тиками LSE (bid/ask). "
+                           "Повністю за тиками стане, коли воркер накопичить сесію.")
+            elif "CVD" in layers and not cvd_exact:
                 st.caption("CVD~ і Delta: оцінка за 1-хвилинними свічками (метод BVC), не точні дані bid/ask. "
-                           "Точна CVD з'являється після підключення тикових даних (ключ DATABENTO_API_KEY у Secrets).")
+                           "Для CVD за реальними тиками запустіть lse_worker на ПК (див. інструкцію) або підключіть DATABENTO_API_KEY.")
     if right is not None:
         with right:
             st.markdown(f'<div class="panel" style="max-height:{chart_h}px;overflow:auto"><div class="ph">Рівні<span class="src">відстань до ціни, п.</span></div>'

@@ -58,10 +58,53 @@
 <script>__LIB__</script>
 <script>
 (function () {
-  const P = __PAYLOAD__;
+  const INLINE = __PAYLOAD__;
+  const POLL_KEY = __POLLKEY__;
   const showErr = (m) => { const e = document.getElementById('err'); e.style.display = 'flex'; e.textContent = m; };
   if (!window.LightweightCharts) { showErr('Не вдалося завантажити бібліотеку графіка.'); return; }
   const LW = window.LightweightCharts;
+  let gen = 0, cleanup = null, liveApply = null, liveCfg = null;
+
+  // ---- Живі тики LSE прямо в браузері (свічка рухається як у TradingView, без перезавантаження сторінки)
+  let ws = null, wsKey = '', wsStop = false;
+  let fmtK;
+  try { fmtK = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Kyiv', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+  catch (e) { fmtK = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Kiev', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+  const kyivWall = (ts) => { const p = {}; fmtK.formatToParts(new Date(ts * 1000)).forEach((x) => { p[x.type] = x.value; });
+    return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) / 1000; };
+  function ensureWs(L) {
+    const k = L ? L.symbol + '|' + L.key : '';
+    if (k === wsKey) return;
+    wsKey = k; wsStop = true; try { if (ws) ws.close(); } catch (e) {} ws = null;
+    if (!L) return;
+    wsStop = false;
+    const open = () => {
+      if (wsStop || wsKey !== k) return;
+      let w; try { w = new WebSocket(L.url); } catch (e) { return; }
+      ws = w;
+      w.onmessage = (ev) => {
+        let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+        if (m.type === 'welcome') w.send(JSON.stringify({ action: 'auth', api_key: L.key }));
+        else if (m.type === 'authenticated') w.send(JSON.stringify({ action: 'subscribe', symbol: L.symbol }));
+        else if (m.type === 'tick' && !m.replay && m.symbol === L.symbol && liveApply) {
+          const ts = Date.parse(m.ts) / 1000; if (!isFinite(ts)) return;
+          try { liveApply(+m.price, +(m.volume || 0), kyivWall(ts)); } catch (e) {}
+        }
+      };
+      w.onclose = () => { if (!wsStop && wsKey === k) setTimeout(open, 3000); };
+      w.onerror = () => { try { w.close(); } catch (e) {} };
+    };
+    open();
+  }
+
+  function build(P) {
+  gen += 1; const g = gen;
+  if (cleanup) { try { cleanup(); } catch (e) {} cleanup = null; }
+  liveApply = null; let liveCur = null, extra = 0;
+  document.getElementById('err').style.display = 'none';
+  ['side', 'gx'].forEach((i) => { document.getElementById(i).style.display = 'none'; });
+  document.getElementById('ib-ctl').style.display = 'none';
+  document.getElementById('wrap').style.setProperty('--top', '0px'); document.getElementById('wrap').style.setProperty('--pw', '0px');
   // Тема: беремо фон сторінки Streamlit (якщо iframe має доступ), інакше підказка з Python або системна
   function parseRgb(c) { const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(c || ''); return m ? [+m[1], +m[2], +m[3]] : null; }
   let pageBg = null, dark = P.theme !== 'light';
@@ -200,7 +243,7 @@
         const w = cv.clientWidth, h = cv.clientHeight; if (!w || !h) return;
         let ph = h; try { ph = chart.panes()[0].getHeight(); } catch (e) {}
         const ys = rows.map((r) => candles.priceToCoordinate(r.price));
-        const sig = [w, h, ph, ys[0], ys[ys.length - 1], gxs.scope, gxs.sum, gxs.m].join('|');
+        const sig = [w, h, ph, ys[0], ys[ys.length - 1], gxs.scope, gxs.sum, gxs.m, liveCur ? liveCur.close : 0].join('|');
         if (!force && sig === lastSig) return;
         lastSig = sig;
         const dpr = window.devicePixelRatio || 1;
@@ -219,7 +262,7 @@
         const top = new Set([...vals.keys()].sort((a, b) => Math.abs(vals[b]) - Math.abs(vals[a])).slice(0, 12));
         ctx.font = "500 10px 'IBM Plex Mono', monospace";
         // поточна ціна
-        const last = P.candles[P.candles.length - 1], yl = candles.priceToCoordinate(last.close);
+        const last = liveCur || P.candles[P.candles.length - 1], yl = candles.priceToCoordinate(last.close);
         if (yl != null) { ctx.strokeStyle = 'rgba(120,140,180,0.45)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(0, yl); ctx.lineTo(w, yl); ctx.stroke(); ctx.setLineDash([]); }
         rows.forEach((r, i) => {
           const y = ys[i], v = vals[i];
@@ -257,7 +300,7 @@
       document.getElementById('gx-0').onclick = () => { gxs.scope = '0'; sync(); };
       document.getElementById('gx-sum').onclick = () => { gxs.sum = !gxs.sum; sync(); };
       document.getElementById('gx-m').onchange = (e) => { gxs.m = e.target.value; sync(); };
-      const loop = () => { try { draw(false); } catch (e) {} requestAnimationFrame(loop); };
+      const loop = () => { if (g !== gen) return; try { draw(false); } catch (e) {} requestAnimationFrame(loop); };
       sync(); requestAnimationFrame(loop);
     }
   } catch (e) { console.warn('gex widget failed', e); }
@@ -311,10 +354,11 @@
       + `O <b>${fmt(bar.open)}</b> H <b>${fmt(bar.high)}</b> L <b>${fmt(bar.low)}</b> C <b>${fmt(bar.close)}</b> `
       + `<span class="${cls}">${chg >= 0 ? '+' : ''}${fmt(chg)}</span>`;
   }
-  const lastBar = P.candles[P.candles.length - 1];
+  let lastBar = P.candles[P.candles.length - 1], hover = false;
   renderLegend(lastBar);
   chart.subscribeCrosshairMove((param) => {
     const bar = param && param.seriesData ? param.seriesData.get(candles) : null;
+    hover = !!bar;
     renderLegend(bar || lastBar);
   });
 
@@ -330,7 +374,7 @@
   chart.timeScale().setVisibleLogicalRange(range);
   chart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
     if (!r) return;
-    try { localStorage.setItem(KEY, JSON.stringify({ f: r.from - lastIdx, t: r.to - lastIdx })); } catch (e) {}
+    try { localStorage.setItem(KEY, JSON.stringify({ f: r.from - lastIdx - extra, t: r.to - lastIdx - extra })); } catch (e) {}
   });
   document.getElementById('btn-fit').onclick = () => chart.timeScale().scrollToRealTime();
   document.getElementById('btn-reset').onclick = () => {
@@ -338,7 +382,45 @@
     chart.timeScale().setVisibleLogicalRange(defRange());
     chart.priceScale('right').applyOptions({ autoScale: true });
   };
-  window.__chart = chart; window.__ready = true;
+  window.__chart = chart; window.__ready = true; window.__cur = () => liveCur;
+
+  // ---- Живе оновлення останньої свічки й обсягу з тиків (лише внутрішньоденні ТФ)
+  const L = P.live;
+  if (L && L.tf_sec && !P.daily && P.candles.length) {
+    const tfs = L.tf_sec, lv = {};
+    const lastC = P.candles[P.candles.length - 1], lastV = P.volume.length ? P.volume[P.volume.length - 1] : null;
+    let cur = { time: lastC.time, open: lastC.open, high: lastC.high, low: lastC.low, close: lastC.close };
+    let baseVol = lastV && lastV.time === lastC.time ? lastV.value : 0;
+    liveCur = cur;
+    liveApply = (price, size, wall) => {
+      const b = Math.floor(wall / tfs) * tfs;
+      if (b < cur.time || !isFinite(price) || price <= 0) return;
+      lv[b] = (lv[b] || 0) + (size || 0);
+      if (b === cur.time) { cur.high = Math.max(cur.high, price); cur.low = Math.min(cur.low, price); cur.close = price; }
+      else { cur = { time: b, open: price, high: price, low: price, close: price }; baseVol = 0; extra += 1; }
+      liveCur = cur;
+      candles.update(cur);
+      const v = Math.max(baseVol, lv[b] || 0);
+      vs.update({ time: b, value: v, color: cur.close >= cur.open ? 'rgba(38,166,154,0.35)' : 'rgba(239,83,80,0.35)' });
+      lastBar = cur; if (!hover) renderLegend(cur);
+    };
+  }
+  ensureWs(L && L.tf_sec && !P.daily ? L : null);
+  cleanup = () => { try { chart.remove(); } catch (e) {} };
+  }
+
+  // ---- Запуск: або дані вшиті в сторінку, або сторінка стабільна і бере дані з сусіднього невидимого фрейму
+  if (INLINE) { build(INLINE); }
+  else {
+    let ver = null;
+    const poll = () => {
+      let d = null;
+      try { d = window.parent.__ASH && window.parent.__ASH[POLL_KEY]; }
+      catch (e) { showErr('Немає доступу до даних графіка (батьківська сторінка).'); return; }
+      if (d && d.v !== ver) { ver = d.v; try { build(JSON.parse(d.j)); } catch (e) { console.error(e); showErr('Помилка побудови графіка: ' + e.message); } }
+    };
+    poll(); setInterval(poll, 400);
+  }
 })();
 </script>
 </body>

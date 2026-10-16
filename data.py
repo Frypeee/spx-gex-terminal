@@ -150,6 +150,8 @@ def mt5_feed(inst: C.Instrument, url: str | None, token: str | None) -> Feed | N
     except Exception:  # noqa: BLE001
         fd = futures_daily(inst.fut)
     age_min = (pd.Timestamp.now(tz="UTC") - f1.value.index[-1]).total_seconds() / 60
+    if age_min > 3 * 1440:          # дані моста мертві (не оновлювались >3 діб) -> Yahoo
+        return None
     meta = _BRIDGE_META.get(inst.key, {})
     lse = meta.get("src") == "LSE"
     who = "LSE" if lse else "MT5"

@@ -68,10 +68,14 @@ def ib_box(bars: pd.DataFrame, td, ibh: float | None, ibl: float | None, tf: str
     return {"t0": int(after[0]), "t1": int(ts[-1]), "ib_end": t1, "hi": round(float(ibh), 2), "lo": round(float(ibl), 2)}
 
 
-def build_chart_html(*, title: str, key: str, tf: str, bars: pd.DataFrame, levels: list[dict],
-                     profile: list[dict], sv: pd.DataFrame | None, show_vwap: bool, show_cvd: bool,
-                     theme: str = "dark", ib: dict | None = None, show_ib: bool = True,
-                     cvd_exact: bool = False) -> str:
+TF_SEC = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600}
+LSE_WS = "wss://data-ws.londonstrategicedge.com"
+
+
+def _build_payload(*, title: str, key: str, tf: str, bars: pd.DataFrame, levels: list[dict],
+                   profile: list[dict], sv: pd.DataFrame | None, show_vwap: bool, show_cvd: bool,
+                   theme: str = "dark", ib: dict | None = None, show_ib: bool = True,
+                   cvd_exact: bool = False, live: dict | None = None) -> dict:
     daily = tf == "1D"
     ts = to_ts(bars.index, daily=daily)
     candles = [
@@ -104,9 +108,29 @@ def build_chart_html(*, title: str, key: str, tf: str, bars: pd.DataFrame, level
         "levels": levels, "profile": profile, "vwap": vwap, "cvd": cvd, "delta": delta,
         "ib": ib if show_ib else None, "ib_available": bool(ib), "cvd_exact": cvd_exact,
         "default_bars": DEFAULT_BARS.get(tf, 150), "bar_spacing": BAR_SPACING.get(tf, 7),
+        "live": ({"url": LSE_WS, "key": live["key"], "symbol": live["symbol"], "tf_sec": TF_SEC[tf]}
+                 if live and live.get("key") and live.get("symbol") and tf in TF_SEC else None),
     }
-    data = json.dumps(payload, separators=(",", ":"), allow_nan=False).replace("</", "<\\/")
-    return _TEMPLATE.replace("__LIB__", _LIB).replace("__PAYLOAD__", data)
+    return payload
+
+
+def _dumps(payload) -> str:
+    return json.dumps(payload, separators=(",", ":"), allow_nan=False).replace("</", "<\\/")
+
+
+def build_chart_html(**kw) -> str:
+    """Самодостатня сторінка (дані вшито). Використовується в тестах і як запасний варіант."""
+    return _TEMPLATE.replace("__LIB__", _LIB).replace("__PAYLOAD__", _dumps(_build_payload(**kw))).replace("__POLLKEY__", "null")
+
+
+def build_chart_parts(poll_key: str, **kw) -> tuple[str, str]:
+    """(стабільна сторінка графіка, невидимий фрейм з даними). Сторінка графіка не змінюється між оновленнями,
+    тому браузер її не перезавантажує: нові дані підхоплюються на льоту, масштаб і положення зберігаються."""
+    stub = _TEMPLATE.replace("__LIB__", _LIB).replace("__PAYLOAD__", "null").replace("__POLLKEY__", json.dumps(poll_key))
+    blob = json.dumps(_dumps(_build_payload(**kw))).replace("</", "<\\/")
+    data = ("<!doctype html><html><body><script>/*ASHDATAFRAME*/try{var p=window.parent;p.__ASH=p.__ASH||{};"
+            f"p.__ASH[{json.dumps(poll_key)}]={{v:Date.now(),j:{blob}}};}}catch(e){{}}</script></body></html>")
+    return stub, data
 
 
 # ---------------------------------------------------------------- рівні для графіка
