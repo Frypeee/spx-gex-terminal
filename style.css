@@ -182,3 +182,7 @@ header[data-testid="stHeader"] { background: transparent; }
 
 /* невидимий фрейм з даними для графіка (не займає місця і не дає проміжку) */
 div[data-testid="stElementContainer"]:has(iframe[srcdoc*="ASHDATAFRAME"]) { position: absolute !important; width: 0 !important; height: 0 !important; overflow: hidden !important; margin: 0 !important; padding: 0 !important; }
+
+/* без «блимання» під час автооновлення: Streamlit на мить затемнює застарілі елементи до 33% */
+[data-stale="true"], [data-stale="true"] * { opacity: 1 !important; transition: none !important; filter: none !important; }
+[data-testid="stStatusWidget"] { visibility: hidden !important; }
