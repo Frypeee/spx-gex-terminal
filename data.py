@@ -89,6 +89,9 @@ class Feed:
     note: str = ""
 
 
+_BRIDGE_META: dict = {}     # inst_key -> службові поля останньої відповіді моста (sym, src, upd)
+
+
 def parse_mt5_bars(flat: list) -> pd.DataFrame:
     """Плоский результат HGETALL (ключ, значення, ...) -> OHLCV. Значення: 'o,h,l,c,v'; службові поля ('sym', 'upd') пропускаємо."""
     rows = []
@@ -105,12 +108,22 @@ def parse_mt5_bars(flat: list) -> pd.DataFrame:
     return df[~df.index.duplicated(keep="last")]
 
 
+def clean_bars(df: pd.DataFrame, max_dev: float = 0.15) -> pd.DataFrame:
+    """Прибирає сміттєві свічки: нульові/від'ємні ціни та ціни, що відхиляються >15% від медіани останніх 200."""
+    df = df[(df[["Open", "High", "Low", "Close"]] > 0).all(axis=1)]
+    if len(df) < 5:
+        return df
+    med = float(df["Close"].tail(200).median())
+    ok = (df["Close"] / med - 1).abs() < max_dev
+    return df[ok & ((df["Low"] / med - 1).abs() < max_dev) & ((df["High"] / med - 1).abs() < max_dev)]
+
+
 def _mt5_fetch(inst_key: str, tf: str, url: str, token: str) -> tuple[pd.DataFrame, dict]:
     r = requests.get(f"{url.rstrip('/')}/hgetall/bars:{inst_key}:{tf}", headers={"Authorization": f"Bearer {token}"}, timeout=(5, 12))
     r.raise_for_status()
     flat = r.json().get("result") or []
-    meta = {k: v for k, v in zip(flat[::2], flat[1::2]) if k in ("sym", "upd")}
-    return parse_mt5_bars(flat), meta
+    meta = {k: v for k, v in zip(flat[::2], flat[1::2]) if k in ("sym", "upd", "src")}
+    return clean_bars(parse_mt5_bars(flat)), meta
 
 
 def _resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
@@ -122,7 +135,11 @@ def mt5_feed(inst: C.Instrument, url: str | None, token: str | None) -> Feed | N
     """Ціни з MT5 вашого ПК (CFD брокера/пропфірми) через Upstash; None, якщо не налаштовано чи застаріло."""
     if not (url and token):
         return None
-    f1 = CACHE.get(f"mt5:{inst.key}:M1", 5, lambda: _mt5_fetch(inst.key, "M1", url, token)[0])
+    def _m1():
+        df, meta = _mt5_fetch(inst.key, "M1", url, token)
+        _BRIDGE_META[inst.key] = meta
+        return df
+    f1 = CACHE.get(f"mt5:{inst.key}:M1", 5, _m1)
     if not f1.ok:
         return None
     f5 = CACHE.get(f"mt5:{inst.key}:M5", 20, lambda: _resample(f1.value, "5min"))
@@ -133,8 +150,12 @@ def mt5_feed(inst: C.Instrument, url: str | None, token: str | None) -> Feed | N
     except Exception:  # noqa: BLE001
         fd = futures_daily(inst.fut)
     age_min = (pd.Timestamp.now(tz="UTC") - f1.value.index[-1]).total_seconds() / 60
-    note = "" if age_min < 20 else f"Остання свічка MT5 {age_min:.0f} хв тому: ринок закритий або воркер зупинено."
-    return Feed(f1, f5, fd, f"MT5 {inst.key} CFD (реальний час)", True, note)
+    meta = _BRIDGE_META.get(inst.key, {})
+    lse = meta.get("src") == "LSE"
+    who = "LSE" if lse else "MT5"
+    note = "" if age_min < 20 else f"Остання свічка {who} {age_min:.0f} хв тому: ринок закритий або воркер зупинено."
+    label = f"LSE {meta.get('sym', inst.key + '.F')} (ф'ючерс CME, реальний час)" if lse else f"MT5 {inst.key} CFD (реальний час)"
+    return Feed(f1, f5, fd, label, True, note)
 
 
 def price_feed(inst: C.Instrument, token: str | None = None, env: str = "practice",
