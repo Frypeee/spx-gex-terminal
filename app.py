@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
 
+import mqlevels as MQ
 import alerts as A
 import assistant as AI
 import chart as CH
@@ -207,7 +209,7 @@ def _bars_for_tf(tf, d1et, d5et, daily):
     return L.resample_ohlcv(src, tf).tail(BAR_CAP[tf])
 
 
-def _build_levels(inst, layers, gex, basis, key, vwap, spot, scope):
+def _build_levels(inst, layers, gex, basis, key, vwap, spot, scope, mqm=None):
     """Повертає (специфікації для графіка, рядки таблиці, словник для рушія). Усі ціни в рівнях інструмента."""
     spec, table, eng = [], [], {}
     sh = (lambda p: G.shift_level(p, basis, inst.tick)) if basis is not None else (lambda p: None)
@@ -221,29 +223,40 @@ def _build_levels(inst, layers, gex, basis, key, vwap, spot, scope):
         if in_table:
             table.append(("", name, price, color))
 
-    if gex is not None and basis is not None:
-        mq = gex.mq
+    mqm = mqm or {}
+
+    def pick(name, computed):
+        """Рівень MenthorQ (вручну, у цінах ф'ючерса) має пріоритет над нашим розрахунком."""
+        return mqm[name] if name in mqm else computed
+
+    if (gex is not None and basis is not None) or mqm:
+        mq = gex.mq if gex is not None else {}
+        sh_ = sh if basis is not None else (lambda p: None)
         on, on0, on10 = "Gamma" in layers, "0DTE" in layers, "GEX 1-10" in layers
-        table.append(("Gamma-рівні (ціни інструмента)", "", None, None))
-        hvl = mq.get("HVL") if mq.get("HVL") is not None else gex.flip
-        add(on, "Call Resistance", sh(mq.get("Call Resistance", gex.call_wall)), COL["call"], "dashed", 2)
-        add(on, "Put Support", sh(mq.get("Put Support", gex.put_wall)), COL["put"], "dashed", 2)
-        add(on, "HVL", sh(hvl), COL["flip"], "large", 1)
-        add(on, "MAX PAIN", sh(gex.max_pain), COL["pain"], "dotted")
-        add(on, "PIN", sh(gex.pin), COL["pin"], "dotted", title="PIN 0DTE")
-        if gex.em_1d:
+        table.append(("Gamma-рівні (MenthorQ, вручну)" if mqm else "Gamma-рівні (ціни інструмента)", "", None, None))
+        hvl = mq.get("HVL") if mq.get("HVL") is not None else (gex.flip if gex is not None else None)
+        add(on, "Call Resistance", pick("Call Resistance", sh_(mq.get("Call Resistance", gex.call_wall if gex is not None else None))), COL["call"], "dashed", 2)
+        add(on, "Put Support", pick("Put Support", sh_(mq.get("Put Support", gex.put_wall if gex is not None else None))), COL["put"], "dashed", 2)
+        add(on, "HVL", pick("HVL", sh_(hvl)), COL["flip"], "large", 1)
+        if gex is not None:
+            add(on, "MAX PAIN", sh_(gex.max_pain), COL["pain"], "dotted")
+            add(on, "PIN", sh_(gex.pin), COL["pin"], "dotted", title="PIN 0DTE")
+        if "1D Min" in mqm or "1D Max" in mqm:
+            add("EM" in layers, "1D Min", mqm.get("1D Min"), COL["muted"], "dotted")
+            add("EM" in layers, "1D Max", mqm.get("1D Max"), COL["muted"], "dotted")
+        elif gex is not None and gex.em_1d:
             # 1D Min/Max від вчорашнього закриття, щоб рівні не «їздили» разом із ціною
             center = key.get("PD close") or spot
             add("EM" in layers, "1D Min", round(center - gex.em_1d, 2), COL["muted"], "dotted")
             add("EM" in layers, "1D Max", round(center + gex.em_1d, 2), COL["muted"], "dotted")
         table.append(("0DTE", "", None, None))
-        add(on0, "Call Resistance 0DTE", sh(mq.get("Call Resistance 0DTE")), COL["call"], "dotted")
-        add(on0, "Put Support 0DTE", sh(mq.get("Put Support 0DTE")), COL["put"], "dotted")
-        add(on0, "HVL 0DTE", sh(mq.get("HVL 0DTE")), COL["flip"], "dotted")
-        add(on0, "Gamma Wall 0DTE", sh(mq.get("Gamma Wall 0DTE")), COL["king"], "dotted")
+        add(on0, "Call Resistance 0DTE", pick("Call Resistance 0DTE", sh_(mq.get("Call Resistance 0DTE"))), COL["call"], "dotted")
+        add(on0, "Put Support 0DTE", pick("Put Support 0DTE", sh_(mq.get("Put Support 0DTE"))), COL["put"], "dotted")
+        add(on0, "HVL 0DTE", pick("HVL 0DTE", sh_(mq.get("HVL 0DTE"))), COL["flip"], "dotted")
+        add(on0, "Gamma Wall 0DTE", pick("Gamma Wall 0DTE", sh_(mq.get("Gamma Wall 0DTE"))), COL["king"], "dotted")
         table.append(("GEX 1–10 (за силою гамми)", "", None, None))
         for i in range(1, 11):
-            add(on10, f"GEX {i}", sh(mq.get(f"GEX {i}")), "#c98a3a", "dotted")
+            add(on10, f"GEX {i}", pick(f"GEX {i}", sh_(mq.get(f"GEX {i}"))), "#c98a3a", "dotted")
 
     if vwap is not None:
         eng["VWAP"] = vwap
@@ -407,7 +420,12 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
         st.warning(f"Рівні GEX не показано: {why}. Свічки, рівні дня й CVD працюють.")
 
     # Рівні
-    spec, table_rows, eng_levels = _build_levels(inst, layers, gex, basis, key, vwap, spot, scope)
+    mq_state = st.session_state.setdefault("mq_manual", {})
+    if inst.key not in mq_state:
+        mq_state[inst.key] = MQ.load_levels(UPSTASH_URL, UPSTASH_TOKEN, inst.key) or {}
+    mqd = mq_state.get(inst.key) or {}
+    mqm = mqd.get("levels") or None
+    spec, table_rows, eng_levels = _build_levels(inst, layers, gex, basis, key, vwap, spot, scope, mqm)
 
     # Чекпоінти дня і сценарій
     flow = FL.compute_flow(inst=inst, d5=d5_base, kl=key, atr=L.atr20(fd.value if fd.ok else None, key.td), now_et=now_et,
@@ -478,6 +496,33 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
         with right:
             st.markdown(f'<div class="panel" style="max-height:{chart_h}px;overflow:auto"><div class="ph">Рівні<span class="src">відстань до ціни, п.</span></div>'
                         + ui.levels_table(table_rows, spot) + "</div>", unsafe_allow_html=True)
+
+    # ---- рівні MenthorQ, вставлені вручну (з вашої підписки)
+    with st.expander("MenthorQ: вставити свої рівні" + (" (активні)" if mqm else "")):
+        if mqm:
+            age_h = (time.time() - mqd.get("saved", time.time())) / 3600
+            st.caption(f"На графіку зараз рівні MenthorQ для {inst.key}, збережено {age_h:.0f} год тому."
+                       + (" Вони застаріли, вставте свіжі." if age_h > 20 else ""))
+        txt = st.text_area("Текст рівнів із сайту MenthorQ (Request Levels → Copy)", key=f"mq_txt_{inst.key}", height=90,
+                           placeholder="$ES1!: Call Resistance, 7850, Put Support, 7700, HVL, 7790, ...")
+        c_a, c_b = st.columns(2)
+        if c_a.button("Застосувати", key=f"mq_ok_{inst.key}"):
+            parsed = MQ.parse_mq_text(txt)
+            lv = parsed.get(inst.key) or parsed.get("*")
+            if lv:
+                mq_state[inst.key] = {"levels": lv, "saved": int(time.time())}
+                saved = MQ.save_levels(UPSTASH_URL, UPSTASH_TOKEN, inst.key, lv)
+                st.session_state["mq_note"] = (f"Прийнято {len(lv)} рівнів для {inst.key}."
+                                               + ("" if saved else " Збережено лише на цей сеанс (немає Upstash)."))
+                st.rerun(scope="fragment")
+            else:
+                st.warning(f"У тексті не знайдено рівнів для {inst.key}. Перевірте, що вставлено рядок із «${inst.key}1!: …».")
+        if c_b.button("Прибрати", key=f"mq_clear_{inst.key}"):
+            mq_state[inst.key] = {}
+            MQ.clear_levels(UPSTASH_URL, UPSTASH_TOKEN, inst.key)
+            st.rerun(scope="fragment")
+        if st.session_state.get("mq_note"):
+            st.success(st.session_state.pop("mq_note"))
 
     # ---- діагностика: вивантаження ланцюжка опціонів для звірки рівнів із MenthorQ
     with st.expander("Діагностика: експорт даних для звірки з MenthorQ"):
