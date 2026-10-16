@@ -65,6 +65,16 @@ UPSTASH_URL, UPSTASH_TOKEN = secret("UPSTASH_URL"), secret("UPSTASH_TOKEN")
 DATABENTO_KEY = secret("DATABENTO_API_KEY")
 FRED_KEY = secret("FRED_API_KEY")
 LSE_BROWSER_KEY = secret("LSE_BROWSER_KEY")      # необов'язково: живі тики LSE прямо в браузері
+
+
+def viewer_email() -> str | None:
+    """Email авторизованого глядача (у приватному додатку Streamlit Cloud). У публічному — None."""
+    try:
+        u = getattr(st, "user", None) or getattr(st, "experimental_user", None)
+        e = getattr(u, "email", None) if u is not None else None
+        return str(e) if e else None
+    except Exception:  # noqa: BLE001
+        return None
 TG_TOKEN, TG_CHAT = secret("TELEGRAM_BOT_TOKEN"), secret("TELEGRAM_CHAT_ID")
 
 
@@ -367,6 +377,12 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
         basis, basis_src = float(basis_override), "ручний"
     else:
         basis, basis_src = L.calc_basis(d1_utc, fi.value if fi.ok else None, chain_spot)
+        # basis змінюється повільно: якщо зараз порахувати не вдалося (мало спільних хвилин), беремо останнє відоме (до 6 год)
+        bl = st.session_state.setdefault("basis_last", {})
+        if basis is not None:
+            bl[inst.key] = (basis, basis_src, time.time())
+        elif inst.key in bl and time.time() - bl[inst.key][2] < 6 * 3600:
+            basis, basis_src = bl[inst.key][0], "останній відомий"
 
     # GEX
     gex = None
@@ -490,7 +506,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
                 title=f"{inst.key}1!  {tf}", key=f"{inst.key}_{tf}", tf=tf, bars=bars, levels=spec, profile=profile,
                 sv=sv_disp, show_vwap="VWAP" in layers, show_cvd="CVD" in layers, theme=theme, ib=ib,
                 show_ib="IB" in layers, cvd_exact=cvd_exact,
-                live={"key": LSE_BROWSER_KEY, "symbol": lse_sym} if (LSE_BROWSER_KEY and lse_sym) else None)
+                live={"key": LSE_BROWSER_KEY, "symbol": lse_sym} if (LSE_BROWSER_KEY and lse_sym and viewer_email()) else None)   # ключ лише для авторизованих
             stub, blob = CH.build_chart_parts(f"{inst.key}_{tf}", **ch_kw)
             render_chart(stub, chart_h)      # сторінка графіка стабільна: браузер її не перезавантажує
             render_chart(blob, 1, hidden=True)   # невидимий фрейм: передає свіжі дані в графік
