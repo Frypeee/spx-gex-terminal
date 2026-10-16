@@ -181,7 +181,7 @@ with st.expander("Вікна й макет"):
                           help="Відкриє вибрану вкладку у спливному вікні поверх сторінки.")
 
 basis_override = float(st.session_state.get("basis_override", 0.0) or 0.0)
-REFRESH = "15s" if OANDA_TOKEN else "30s"
+REFRESH = "15s" if (OANDA_TOKEN or (UPSTASH_URL and UPSTASH_TOKEN)) else "30s"
 if E.session_phase(datetime.now(C.ET))[0] == "closed":
     REFRESH = "120s"
 
@@ -328,7 +328,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
     now_et = datetime.now(C.ET)
     now_utc = now_et.astimezone(timezone.utc)
 
-    feed = data.price_feed(inst, OANDA_TOKEN, OANDA_ENV)
+    feed = data.price_feed(inst, OANDA_TOKEN, OANDA_ENV, UPSTASH_URL, UPSTASH_TOKEN)
     f1, f5, fd = feed.f1, feed.f5, feed.fd
     fi, fc = data.index_1m(inst.index), data.option_chain(inst.chain)
 
@@ -391,7 +391,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
     chg_pct = chg / pdc * 100 if pdc else None
     phase, _ = E.session_phase(now_et)
     kyiv = now_et.astimezone(C.KYIV)
-    src_chip = ui.chip("Дані: " + ("OANDA CFD, реальний час" if feed.realtime else "Yahoo CME, затримка ~10 хв"), "ok" if feed.realtime else "warn")
+    src_chip = ui.chip("Дані: " + (feed.source.split(" (")[0] + ", реальний час" if feed.realtime else "Yahoo CME, затримка ~10 хв"), "ok" if feed.realtime else "warn")
     chips = [
         src_chip,
         ui.chip(f"Остання свічка: {ui._dur(last_bar_age)} тому", "warn" if (phase != "closed" and last_bar_age > (150 if feed.realtime else 900)) else "ok"),
@@ -478,6 +478,19 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
         with right:
             st.markdown(f'<div class="panel" style="max-height:{chart_h}px;overflow:auto"><div class="ph">Рівні<span class="src">відстань до ціни, п.</span></div>'
                         + ui.levels_table(table_rows, spot) + "</div>", unsafe_allow_html=True)
+
+    # ---- діагностика: вивантаження ланцюжка опціонів для звірки рівнів із MenthorQ
+    with st.expander("Діагностика: експорт даних для звірки з MenthorQ"):
+        try:
+            if fc.ok and gex is not None:
+                head = f"# inst={inst.key}; spot_index={spot - basis:.2f}; spot_fut={spot:.2f}; basis={basis:.2f}; time_et={now_et:%Y-%m-%d %H:%M}\n"
+                st.download_button("Завантажити CSV ланцюжка", head + fc.value["df"].to_csv(index=False),
+                                   file_name=f"chain_{inst.key}_{now_et:%Y%m%d_%H%M}.csv", mime="text/csv", key=f"dl_{inst.key}")
+                st.caption("Надішліть цей файл Claude разом зі скріншотом рівнів MenthorQ за той самий час.")
+            else:
+                st.caption("Ланцюжок опціонів недоступний.")
+        except Exception as e:  # noqa: BLE001
+            st.caption(f"Експорт недоступний: {e}")
 
     # ---- вкладки з інформаційними панелями
     upcoming_show = [e for e in events_all if now_utc - timedelta(minutes=30) <= e["ts"] <= now_utc + timedelta(hours=24)]

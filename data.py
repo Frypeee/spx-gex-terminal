@@ -89,9 +89,64 @@ class Feed:
     note: str = ""
 
 
-def price_feed(inst: C.Instrument, token: str | None = None, env: str = "practice") -> Feed:
-    """Джерело цін: OANDA CFD у реальному часі, якщо є токен; інакше Yahoo (ф'ючерс CME, затримка ~10 хв)."""
+def parse_mt5_bars(flat: list) -> pd.DataFrame:
+    """Плоский результат HGETALL (ключ, значення, ...) -> OHLCV. Значення: 'o,h,l,c,v'; службові поля ('sym', 'upd') пропускаємо."""
+    rows = []
+    for k, v in zip(flat[::2], flat[1::2]):
+        try:
+            t = int(k)
+            o, h, l, c, vol = (float(x) for x in str(v).split(","))
+        except (ValueError, TypeError):
+            continue
+        rows.append((pd.Timestamp(t, unit="s", tz="UTC"), o, h, l, c, vol))
+    if not rows:
+        raise ValueError("MT5-міст не віддав свічок")
+    df = pd.DataFrame(rows, columns=["t", "Open", "High", "Low", "Close", "Volume"]).set_index("t").sort_index()
+    return df[~df.index.duplicated(keep="last")]
+
+
+def _mt5_fetch(inst_key: str, tf: str, url: str, token: str) -> tuple[pd.DataFrame, dict]:
+    r = requests.get(f"{url.rstrip('/')}/hgetall/bars:{inst_key}:{tf}", headers={"Authorization": f"Bearer {token}"}, timeout=(5, 12))
+    r.raise_for_status()
+    flat = r.json().get("result") or []
+    meta = {k: v for k, v in zip(flat[::2], flat[1::2]) if k in ("sym", "upd")}
+    return parse_mt5_bars(flat), meta
+
+
+def _resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    out = df.resample(rule, label="left", closed="left").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})
+    return out.dropna(subset=["Open"])
+
+
+def mt5_feed(inst: C.Instrument, url: str | None, token: str | None) -> Feed | None:
+    """Ціни з MT5 вашого ПК (CFD брокера/пропфірми) через Upstash; None, якщо не налаштовано чи застаріло."""
+    if not (url and token):
+        return None
+    f1 = CACHE.get(f"mt5:{inst.key}:M1", 5, lambda: _mt5_fetch(inst.key, "M1", url, token)[0])
+    if not f1.ok:
+        return None
+    f5 = CACHE.get(f"mt5:{inst.key}:M5", 20, lambda: _resample(f1.value, "5min"))
+    try:
+        fd = CACHE.get(f"mt5:{inst.key}:D1", 600, lambda: _mt5_fetch(inst.key, "D1", url, token)[0])
+        if not fd.ok:
+            fd = futures_daily(inst.fut)
+    except Exception:  # noqa: BLE001
+        fd = futures_daily(inst.fut)
+    age_min = (pd.Timestamp.now(tz="UTC") - f1.value.index[-1]).total_seconds() / 60
+    note = "" if age_min < 20 else f"Остання свічка MT5 {age_min:.0f} хв тому: ринок закритий або воркер зупинено."
+    return Feed(f1, f5, fd, f"MT5 {inst.key} CFD (реальний час)", True, note)
+
+
+def price_feed(inst: C.Instrument, token: str | None = None, env: str = "practice",
+               up_url: str | None = None, up_token: str | None = None) -> Feed:
+    """Джерело цін: MT5 (через Upstash) > OANDA CFD > Yahoo (ф'ючерс CME, затримка ~10 хв)."""
     note = ""
+    try:
+        m = mt5_feed(inst, up_url, up_token)
+        if m is not None:
+            return m
+    except Exception:  # noqa: BLE001
+        pass
     if token and inst.cfd:
         f1 = CACHE.get(f"oanda:{inst.cfd}:M1", 5, lambda: _oanda(inst.cfd, "M1", 5000, token, env))
         if f1.ok:
