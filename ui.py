@@ -50,9 +50,9 @@ def age_chip(label: str, f, warn_after: float = 180) -> str:
 
 
 # ---------------------------------------------------------------- шапка
-def header(inst_name: str, spot: float | None, chg: float | None, chg_pct: float | None, sub: str,
-           read: dict | None = None, lang: str = "UA") -> str:
-    """Компактна шапка: ціна ліворуч, сценарій Лонг/Шорт праворуч (замість гамми)."""
+def header_parts(inst_name: str, spot: float | None, chg: float | None, chg_pct: float | None, sub: str,
+                 read: dict | None = None, lang: str = "UA") -> tuple[str, str]:
+    """Компактна шапка: (блок ціни, бейдж сценарію Лонг/Шорт)."""
     if spot is None:
         price = f'<span class="dn">{esc(T("no_data", lang))}</span>'
     else:
@@ -67,8 +67,15 @@ def header(inst_name: str, spot: float | None, chg: float | None, chg_pct: float
         extra = (T("str." + read["strength"], lang) if bias != "WAIT" else T("none_side", lang))
         badge = (f'<div class="regime scn-{cls}"><div class="l">{esc(T("scn", lang))}{q("", text=T("tip.scenario", lang))}</div>'
                  f'<div class="v">{lab}</div><div class="l2">{esc(extra)}</div></div>')
-    return (f'<div class="top"><div><div class="muted" style="font:500 12px var(--sans);margin-bottom:2px">{esc(inst_name)}</div>'
-            f'<h1>{price}</h1><div class="sub">{esc(sub)}</div></div>{badge}</div>')
+    left = (f'<div class="top"><div><div class="muted" style="font:500 12px var(--sans);margin-bottom:2px">{esc(inst_name)}</div>'
+            f'<h1>{price}</h1><div class="sub">{esc(sub)}</div></div></div>')
+    return left, badge
+
+
+def header(inst_name: str, spot: float | None, chg: float | None, chg_pct: float | None, sub: str,
+           read: dict | None = None, lang: str = "UA") -> str:
+    left, badge = header_parts(inst_name, spot, chg, chg_pct, sub, read, lang)
+    return left + badge
 
 
 def status_chips(chips: list[str]) -> str:

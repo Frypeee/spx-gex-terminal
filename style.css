@@ -224,3 +224,4 @@ div[data-testid="stElementContainer"]:has(iframe[srcdoc*="ASHDATAFRAME"]) { posi
   .st-key-wdpanel { height:auto !important; max-height:420px; }
   .top { flex-wrap: wrap; }
 }
+[data-testid="stPopoverBody"] { min-width: min(560px, 92vw); }

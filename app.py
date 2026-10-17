@@ -503,7 +503,19 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
         ui.chip("Basis " + (f"{basis:+.2f} ({basis_src})" if basis is not None else "н/д"), "" if basis is not None else "bad"),
     ]
     sub = f"{tr('updated')} {kyiv:%d.%m %H:%M:%S} {tr('kyiv')} · {tr('chg_rth')} {fmt_pct(chg_pct)}"
-    st.markdown(ui.header(inst.name, spot, chg, chg_pct, sub, read, lang), unsafe_allow_html=True)
+    h_left, h_badge = ui.header_parts(inst.name, spot, chg, chg_pct, sub, read, lang)
+    hc = st.columns([6, 1.7, 1.15], vertical_alignment="center", gap="small")
+    hc[0].markdown(h_left, unsafe_allow_html=True)
+    hc[1].markdown(h_badge, unsafe_allow_html=True)
+    with hc[2]:      # структура страйків: компактно, у правому куті над графіком (відкривається по кліку)
+        with st.popover(tr("strikes.btn"), icon=":material/bar_chart:", use_container_width=True):
+            if gex is not None and len(gex.mq_profile):
+                st.caption(tr("strikes.title"))
+                smode = st.segmented_control(tr("strikes.mode"), ["net", "cp"], default="net", key="strikes_mode",
+                                             format_func=lambda m: tr("strikes." + m), label_visibility="collapsed") or "net"
+                st.altair_chart(SK.strike_chart(gex.mq_profile, gex.spot, gex.mq, lang, smode, height=260), use_container_width=True)
+            else:
+                st.caption(tr("strikes.none"))
     if feed.note:
         st.warning(feed.note)
     if gex is None:
@@ -642,13 +654,6 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, layers: tuple, 
         with c_l:
             st.markdown(ui.levels_signal(mq_rows, spot), unsafe_allow_html=True)
         with c_r:
-            if gex is not None and len(gex.mq_profile):
-                st.caption(tr("strikes.title") + " · " + tr("strikes.key"))
-                smode = st.segmented_control(tr("strikes.mode"), ["net", "cp"], default="net", key="strikes_mode",
-                                             format_func=lambda m: tr("strikes." + m), label_visibility="collapsed") or "net"
-                st.altair_chart(SK.strike_chart(gex.mq_profile, gex.spot, gex.mq, lang, smode), use_container_width=True)
-            else:
-                st.caption(tr("strikes.none"))
             eq = J.equity(jr, spot)
             st.caption("Паперовий журнал сигналів (поки сторінка відкрита): зміни оцінки за методичкою в пунктах, без комісій.")
             if len(eq) > 1:
