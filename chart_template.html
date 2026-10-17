@@ -497,6 +497,23 @@
   cleanup = () => { if (cdTimer) clearInterval(cdTimer); clearInterval(prTimer); try { chart.remove(); } catch (e) {} };
   }
 
+  // ---- Висота iframe під вікно: графік (і панель справа) тягнуться до низу екрана без порожнього місця
+  if (!INLINE) {
+    const fit = () => {
+      try {
+        const fe = window.frameElement, pw = window.parent;
+        if (!fe || window.__ashFS) return;
+        const main = pw.document.querySelector('[data-testid="stMain"]');
+        const y = fe.getBoundingClientRect().top + (main ? main.scrollTop : 0);
+        const h = Math.max(420, Math.floor(pw.innerHeight - y - 14));
+        if (Math.abs((fe.getBoundingClientRect().height || 0) - h) > 2) { fe.style.height = h + 'px'; fe.setAttribute('height', h); if (fe.parentElement) { fe.parentElement.style.height = h + 'px'; fe.parentElement.style.minHeight = h + 'px'; } }
+        pw.document.documentElement.style.setProperty('--ash-h', h + 'px');
+      } catch (e) {}
+    };
+    fit(); setInterval(fit, 700);
+    try { window.parent.addEventListener('resize', fit); } catch (e) {}
+  }
+
   // ---- Запуск: або дані вшиті в сторінку, або сторінка стабільна і бере дані з сусіднього невидимого фрейму
   if (INLINE) { build(INLINE); }
   else {

@@ -371,6 +371,7 @@
     const fe = window.frameElement; if (!fe) { try { D('wrap').requestFullscreen(); } catch (e) {} return; }
     if (!fsOn) { fsSave = fe.getAttribute('style') || ''; fe.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;z-index:99999;background:' + (S.cx ? S.cx.T.bg : '#000'); fsOn = true; }
     else { fe.style.cssText = fsSave; fsOn = false; }
+    window.__ashFS = fsOn;
   }
 
   window.ASHDRAW = {

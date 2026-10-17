@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import html
 import io
 import math
 import os
@@ -259,6 +260,7 @@ ss0.setdefault("rpanel", "widgets")
 
 with st.container(key="tb"):
     tb = st.columns([0.9, 3.4, 1.2, 0.5, 4], vertical_alignment="center", gap="small")
+    WARN_SLOT = tb[4].empty()
     tb[0].markdown(f'<span class="tlabel">{inst_key}1!</span>', unsafe_allow_html=True)
     with tb[1]:
         tf = pick("Таймфрейм", TF_OPTIONS, "5m", "tf")
@@ -420,11 +422,17 @@ def deliver(events, cfg, inst_key, now_et):
 def _set_layer(name: str, key: str) -> None:
     v = st.session_state["vis_layers"]
     (v.add if st.session_state.get(key) else v.discard)(name)
+    st.session_state["_chart_dirty"] = True
 
 
 def _set_hidden(name: str, key: str) -> None:
     h = st.session_state["vis_hidden"]
     (h.discard if st.session_state.get(key) else h.add)(name)
+    st.session_state["_chart_dirty"] = True
+
+
+def _toggle_rail(k: str) -> None:
+    st.session_state["rpanel"] = None if st.session_state.get("rpanel") == k else k
 
 
 def _lvl_group(n: str) -> str:
@@ -846,30 +854,45 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
     PANEL_FN = {k: fn for k, _, fn in RAIL}
     pages = {"summary": page_summary, "options": page_options, "levels": page_levels, "explore": page_explore, "saved": page_saved}
 
+    @st.fragment
+    def side_panel():
+        """Права панель і рейка іконок: власний фрагмент, тож відкриття вкладок не перераховує графік і дані.
+        Структура колонок стала (панель лише ховається стилями), тому iframe графіка не перемонтується."""
+        if ss.pop("_chart_dirty", False):
+            st.rerun(scope="app")          # перемикачі рівнів змінюють сам графік
+        rp = ss.get("rpanel")
+        with st.container(key="side"):
+            c_dr, c_rl = st.columns([1, 0.16], gap="small")
+            with c_dr:
+                if rp in PANEL_FN:
+                    with st.container(height=chart_h, border=False, key="drawer"):
+                        PANEL_FN[rp]()
+                else:
+                    st.markdown('<div class="dr-off"></div>', unsafe_allow_html=True)
+            with c_rl, st.container(key="rail"):
+                for k, icon, _ in RAIL:
+                    st.button("", key=f"rail_{k}", icon=f":material/{icon}:", help=tr("r." + k), use_container_width=True,
+                              type="primary" if rp == k else "tertiary", on_click=_toggle_rail, args=(k,))
+
     if page in pages:
         pages[page]()
     else:
-        rp = ss.get("rpanel")
-        if rp in PANEL_FN:
-            c_chart, c_drawer, c_rail = st.columns([4.1, 1.9, 0.28], gap="small")
-        else:
-            (c_chart, c_rail), c_drawer = st.columns([6.3, 0.28], gap="small"), None
+        c_chart, c_side = st.columns([4.2, 1.9], gap="small")
         with c_chart:
             draw_chart()
-        with c_rail, st.container(key="rail"):
-            for k, icon, _ in RAIL:
-                if st.button("", key=f"rail_{k}", icon=f":material/{icon}:", help=tr("r." + k), use_container_width=True,
-                             type="primary" if rp == k else "tertiary"):
-                    ss["rpanel"] = None if rp == k else k
-                    st.rerun(scope="fragment")
-        if c_drawer is not None:
-            with c_drawer, st.container(height=chart_h, border=False, key="drawer"):
-                PANEL_FN[rp]()
+        with c_side:
+            side_panel()
+        warns = []
         if feed.note:
-            st.warning(feed.note)
+            warns.append(feed.note)
         if gex is None:
             why = ("CBOE: " + (fc.error or "немає даних")) if not fc.ok else "basis не визначено (немає індексу й spot CBOE)"
-            st.warning(f"Рівні GEX не показано: {why}. Свічки, рівні дня й CVD працюють.")
+            warns.append(f"Рівні GEX не показано: {why}. Свічки, рівні дня й CVD працюють.")
+        if warns:
+            full = " · ".join(warns)
+            WARN_SLOT.markdown(f'<span class="warnchip" title="{html.escape(full, quote=True)}">⚠ {html.escape(full)}</span>', unsafe_allow_html=True)
+        else:
+            WARN_SLOT.empty()
 
     st.markdown('<p class="muted" style="font:400 11px var(--sans);margin-top:10px">GEX рахується за відкритим інтересом CBOE '
                 '(затримка ~15 хв) і поточною ціною; конвенція: дилери довгі кол-опціони й короткі пут-опціони. '
