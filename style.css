@@ -300,3 +300,10 @@ div[data-testid="stElementContainer"]:has(iframe[srcdoc*="ASHDATAFRAME"]) { posi
 .av { border-radius:50%; object-fit:cover; border:1px solid var(--line); flex:none; }
 .av0 { display:flex; align-items:center; justify-content:center; font-family:var(--sans); font-weight:600; background:color-mix(in srgb, var(--flip) 28%, transparent); }
 .st-key-ckie { position:fixed !important; width:1px; height:1px; opacity:0; overflow:hidden; pointer-events:none; left:0; bottom:0; }
+
+/* Прибираємо Fork / GitHub / меню ⋮ у правому верхньому куті */
+[data-testid="stToolbarActions"], [data-testid="stAppDeployButton"], .stAppDeployButton,
+[data-testid="stMainMenu"], [data-testid="stToolbar"] a[href*="github.com"],
+[data-testid="stToolbar"] [data-testid="stBaseButton-header"],
+[data-testid="stToolbar"] > div:last-child:not([data-testid="stExpandSidebarButton"]),
+.viewerBadge_container__r5tak, [class*="viewerBadge"], [data-testid="stDecoration"] { display: none !important; }
