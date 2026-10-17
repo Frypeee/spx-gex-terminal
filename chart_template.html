@@ -8,19 +8,20 @@
   :root { --bg:#0a0f18; --fg:#d8e0ee; --muted:#8b97b1; --line:#1e2a3f; --btnbg:#101827; --btnfg:#aab6cf; --btnbd:#263451; }
   html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
   #wrap { position: relative; height: 100%; width: 100%; }
-  #wrap { --top: 0px; --pw: 0px; }
-  #chart { position: absolute; left: 0; top: var(--top); bottom: 0; right: var(--pw); }
+  #wrap { --top: 0px; --pw: 0px; --tl: 42px; }
+  #chart { position: absolute; left: var(--tl); top: var(--top); bottom: 0; right: var(--pw); }
+  #dcv { position: absolute; left: var(--tl); top: var(--top); width: calc(100% - var(--tl) - var(--pw)); height: calc(100% - var(--top)); pointer-events: none; z-index: 4; }
   #side { position: absolute; top: var(--top); right: 0; bottom: 0; width: var(--pw); border-left: 1px solid var(--line); display: none; }
   #side canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
   #legend {
-    position: absolute; left: 10px; top: calc(var(--top) + 8px); z-index: 5; pointer-events: none;
+    position: absolute; left: calc(var(--tl) + 10px); top: calc(var(--top) + 8px); z-index: 5; pointer-events: none;
     font: 500 12px/1.5 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; color: var(--muted);
     text-shadow: 0 0 4px var(--bg), 0 0 8px var(--bg);
   }
   #legend b { color: var(--fg); font-weight: 500; }
   #legend .t { font: 600 13px 'IBM Plex Sans', system-ui, sans-serif; color: var(--fg); margin-right: 8px; }
   #legend .up { color: #26a69a; } #legend .dn { color: #ef5350; }
-  #tools { position: absolute; left: 10px; bottom: 44px; z-index: 6; display: flex; gap: 6px; align-items: center; }
+  #tools { position: absolute; left: calc(var(--tl) + 10px); bottom: 44px; z-index: 6; display: flex; gap: 6px; align-items: center; }
   #tools label { display: inline-flex; align-items: center; gap: 5px; color: var(--btnfg); font: 500 11px 'IBM Plex Sans', system-ui, sans-serif;
                  background: var(--btnbg); border: 1px solid var(--btnbd); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
   #tools input[type=color] { width: 18px; height: 18px; padding: 0; border: 0; background: none; cursor: pointer; }
@@ -31,7 +32,7 @@
   }
   #tools button:hover { border-color: #3b82f6; color: var(--fg); }
   #tools button:focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
-  #gx { position: absolute; right: 8px; left: 8px; top: 0; height: 30px; z-index: 7; display: none; gap: 6px; align-items: center; justify-content: flex-end; }
+  #gx { position: absolute; right: 8px; left: calc(var(--tl) + 8px); top: 0; height: 30px; z-index: 7; display: none; gap: 6px; align-items: center; justify-content: flex-end; }
   #gx .ttl { margin-right: auto; color: var(--muted); font: 600 11px 'IBM Plex Sans', system-ui, sans-serif; letter-spacing: .04em; }
   #gx .seg { display: inline-flex; border: 1px solid var(--btnbd); border-radius: 5px; overflow: hidden; }
   #gx button, #gx select { background: var(--btnbg); color: var(--btnfg); border: 0; font: 500 11px 'IBM Plex Sans', system-ui, sans-serif; padding: 5px 10px; cursor: pointer; }
@@ -39,6 +40,25 @@
   #gx button.on { background: #1d3a6b; color: #fff; }
   #gx .solo { border: 1px solid var(--btnbd); border-radius: 5px; }
   #gx select { border: 1px solid var(--btnbd); border-radius: 5px; padding: 5px 8px; }
+  #dtools { position: absolute; left: 0; top: var(--top); bottom: 0; width: var(--tl); display: flex; flex-direction: column; align-items: center; gap: 2px;
+            padding-top: 6px; background: var(--bg); border-right: 1px solid var(--line); z-index: 8; overflow: hidden auto; }
+  #dtools button, #acts button { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: transparent;
+            color: var(--btnfg); border: 0; border-radius: 5px; cursor: pointer; }
+  #dtools button:hover, #acts button:hover:not(:disabled) { background: var(--btnbg); color: var(--fg); }
+  #dtools button.on { background: rgba(59,130,246,.18); color: #3b82f6; }
+  #dtools i, #acts i { width: 22px; height: 1px; background: var(--line); margin: 5px 0; }
+  #acts { position: absolute; top: calc(var(--top) + 6px); right: calc(var(--pw) + 84px); display: flex; gap: 2px; align-items: center; z-index: 9;
+          background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 1px 3px; }
+  #acts i { width: 1px; height: 18px; margin: 0 3px; }
+  #acts button { width: 28px; height: 28px; } #acts button:disabled { opacity: .3; cursor: default; }
+  #dstyle { position: absolute; top: calc(var(--top) + 48px); left: calc(var(--tl) + 10px); display: none; gap: 6px; align-items: center; z-index: 10;
+            background: var(--btnbg); border: 1px solid var(--btnbd); border-radius: 6px; padding: 4px 6px; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+  #dstyle input[type=color] { width: 26px; height: 24px; padding: 0; border: 0; background: none; cursor: pointer; }
+  #dstyle select, #dstyle input#ds-name { background: var(--bg); color: var(--fg); border: 1px solid var(--btnbd); border-radius: 4px; font: 500 11px 'IBM Plex Sans', sans-serif; padding: 3px 4px; }
+  #dstyle input#ds-name { width: 92px; }
+  #dstyle button { background: transparent; color: var(--btnfg); border: 0; border-radius: 4px; cursor: pointer; width: 26px; height: 24px; font-size: 13px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+  #dstyle button:hover { background: var(--bg); color: var(--fg); }
+  #dtxt { position: absolute; display: none; z-index: 12; width: 170px; background: var(--btnbg); color: var(--fg); border: 1px solid #3b82f6; border-radius: 4px; font: 600 13px 'IBM Plex Sans', sans-serif; padding: 3px 7px; outline: none; }
   #cd { position: absolute; right: var(--pw); z-index: 6; display: none; text-align: center; box-sizing: border-box;
         font: 500 11px/17px 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; color: #fff; pointer-events: none; border-radius: 2px; }
   #err { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
@@ -48,6 +68,11 @@
 <body>
 <div id="wrap">
   <div id="chart"></div>
+  <canvas id="dcv"></canvas>
+  <div id="dtools"></div>
+  <div id="acts"></div>
+  <div id="dstyle"></div>
+  <input id="dtxt" type="text" maxlength="80">
   <div id="side"><canvas id="gxc"></canvas></div>
   <div id="legend"></div>
   <div id="tools"><button id="btn-fit" title="Повернутися до поточного часу">До поточного</button><button id="btn-reset" title="Скинути масштаб">Скинути</button>
@@ -59,6 +84,7 @@
   <div id="err"></div>
 </div>
 <script>__LIB__</script>
+<script>__DRAW__</script>
 <script>
 (function () {
   const INLINE = __PAYLOAD__;
@@ -440,6 +466,7 @@
     };
     tick(); cdTimer = setInterval(tick, 500);
   }
+  try { window.ASHDRAW.attach({ chart, candles, P, el, T }); } catch (e) { console.warn('draw tools failed', e); }
   cleanup = () => { if (cdTimer) clearInterval(cdTimer); try { chart.remove(); } catch (e) {} };
   }
 

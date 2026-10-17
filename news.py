@@ -128,3 +128,22 @@ def parse_calendar(rows: list[dict]) -> list[dict]:
             "forecast": r.get("forecast") or "", "previous": r.get("previous") or "",
         })
     return sorted(out, key=lambda x: x["ts"])
+
+
+ASSET_KW = {
+    "ES": ["s&p", "spx", "wall street", "stocks", "stock market", "dow", "equities", "futures", "russell", "vix", "earnings", "rate cut", "rate hike"],
+    "NQ": ["nasdaq", "tech", "big tech", "nvidia", "apple", "microsoft", "amazon", "meta ", "alphabet", "google", "tesla", "chip",
+           "semiconductor", "openai", "anthropic", "ai ", "magnificent"],
+}
+MACRO_TAGS = {"FED", "CPI", "JOBS", "TARIFF", "GEO"}
+
+
+def for_asset(items: list[dict], key: str) -> list[dict]:
+    """Новини, що стосуються саме цього активу: ключові слова індексу плюс макроподії, які рухають усі індекси США."""
+    kws = ASSET_KW.get(key, [])
+    out = []
+    for it in items:
+        low = f" {it['title'].lower()} "
+        if any(k in low for k in kws) or (set(it.get("tags", [])) & MACRO_TAGS and it.get("high")) or (key == "NQ" and "AI" in it.get("tags", [])):
+            out.append(it)
+    return out

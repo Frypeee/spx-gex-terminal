@@ -409,3 +409,94 @@ def levels_signal(rows: list[tuple[str, float]], spot: float) -> str:
         out.append(f'<div class="lsr"><span>{esc(name)}</span><span class="mono">{fmt(price)}</span>'
                    f'<span class="mono">{d:+.1f}</span><span class="tag {cls}">{side}</span></div>')
     return '<div class="panel">' + "".join(out) + "</div>"
+
+
+# ---------------------------------------------------------------- права панель у стилі MenthorQ
+def mq_header(asset: str, time_txt: str, lang: str = "UA", label: str | None = None) -> str:
+    return (f'<div class="mqh"><span class="a">{esc(asset)}</span><span class="m">{esc(label or T("intraday", lang))}</span>'
+            f'<span class="t">{esc(time_txt)}</span></div>')
+
+
+def mq_scenario(read: dict | None, lang: str = "UA") -> str:
+    if not read:
+        return ""
+    bias = read["bias"]
+    cls = {"LONG": "long", "SHORT": "short", "WAIT": "wait"}[bias]
+    lab = {"LONG": T("long", lang), "SHORT": T("short", lang), "WAIT": T("wait", lang)}[bias]
+    sub = T("str." + read["strength"], lang) if bias != "WAIT" else T("none_side", lang)
+    return (f'<div class="mqc scn {cls}"><div class="k">{esc(T("c.scenario", lang))}</div>'
+            f'<div class="big">{esc(lab.capitalize() if bias != "WAIT" else lab)}</div><div class="s">{esc(sub)}</div></div>')
+
+
+def mq_em(gex, lo: float | None, hi: float | None, spot: float, lang: str = "UA") -> str:
+    if gex is None or not gex.em_1d:
+        return ""
+    em = gex.em_1d
+    lo = lo if lo is not None else spot - em
+    hi = hi if hi is not None else spot + em
+    pos = 50.0 if hi <= lo else max(2.0, min(98.0, (spot - lo) / (hi - lo) * 100))
+    return (f'<div class="mqc"><div class="k">{esc(T("c.em", lang))}</div>'
+            f'<div class="row"><span class="big">{em / gex.spot * 100:.2f}%</span><span class="r">{em:.1f}</span></div>'
+            f'<div class="rng"><i style="left:{pos:.0f}%"></i></div>'
+            f'<div class="lbl"><span>{esc(T("c.min", lang))}<b class="dn">{fmt(lo)}</b></span><span>{esc(T("c.spot", lang))}<b>{fmt(spot)}</b></span>'
+            f'<span>{esc(T("c.max", lang))}<b class="up">{fmt(hi)}</b></span></div></div>')
+
+
+def mq_dealers(gex, lang: str = "UA") -> str:
+    if gex is None:
+        return ""
+    sm = gex.summary
+
+    def col(v):
+        return "up" if v >= 0 else "dn"
+    mx = max(1e-9, max(abs(v) for v in sm["by_dte"].values()))
+    rows = "".join(
+        f'<div class="br"><span class="n">{k}</span><span class="b"><i class="{col(v)}" style="width:{abs(v) / mx * 100:.0f}%"></i></span>'
+        f'<span class="v {col(v)}">{v:+.2f}B</span></div>' for k, v in sm["by_dte"].items())
+    return (f'<div class="mqc"><div class="k">{esc(T("c.dealers", lang))}</div>'
+            f'<div class="two"><div><div class="l">{esc(T("c.netscope", lang))} · {esc(gex.scope)}</div><div class="big {col(gex.net_total_b)}">{gex.net_total_b:+.2f}B</div></div>'
+            f'<div><div class="l">{esc(T("c.netall", lang))}</div><div class="big {col(sm["net_all_b"])}">{sm["net_all_b"]:+.2f}B</div></div></div>'
+            f'<div class="k2">{esc(T("c.dte", lang))}</div>{rows}</div>')
+
+
+def mq_pc(gex, lang: str = "UA") -> str:
+    if gex is None:
+        return ""
+    sm = gex.summary
+    r = sm.get("pc_vol") or sm.get("pc_oi")
+    if not r:
+        return ""
+    label_key = "c.pcr" if sm.get("pc_vol") else "c.pcr_oi"
+    word = T("c.more_puts" if r > 1.1 else "c.more_calls" if r < 0.9 else "c.balanced", lang)
+    pos = max(4.0, min(96.0, 100.0 / (1.0 + r)))
+    nf = lambda v: f"{v / 1000:.1f}K" if v >= 1000 else f"{v:.0f}"  # noqa: E731
+    return (f'<div class="mqc"><div class="k">{esc(T("c.pc", lang))}</div><div class="mid">{esc(word)}</div>'
+            f'<div class="s c">{esc(T(label_key, lang))} {r:.2f}</div>'
+            f'<div class="pcb"><i style="left:{pos:.0f}%"></i></div>'
+            f'<div class="lbl"><span class="dn">{esc(T("c.puts", lang))}<b>{nf(sm.get("oi_put", 0))}</b></span><span>{esc(T("c.balanced", lang)).upper()}</span>'
+            f'<span class="up">{esc(T("c.calls", lang))}<b>{nf(sm.get("oi_call", 0))}</b></span></div></div>')
+
+
+def method_card(snap: dict, near: tuple[str, float, float] | None, lang: str = "UA") -> str:
+    cls = {"LONG": "long", "SHORT": "short", "WAIT": "wait"}[snap["bias"]]
+    lab = {"LONG": T("long", lang), "SHORT": T("short", lang), "WAIT": T("wait", lang)}[snap["bias"]]
+    trig = (f'{T("m.trigger", lang)} {esc(snap["level"])} {fmt(snap["level_price"])} · {esc(snap["ts"])}' if snap.get("level")
+            else f'{T("m.initial", lang)} · {esc(snap["ts"])}')
+    out = [f'<div class="mqc scn {cls}"><div class="k">{esc(T("r.method", lang))}</div><div class="big">{esc(lab)}</div>'
+           f'<div class="s">{esc(snap["summary"])}</div></div>',
+           f'<div class="mqc"><div class="k">{esc(trig)}</div>']
+    if snap.get("todo"):
+        out.append(f'<div class="k2">{esc(T("m.do", lang))}</div><div class="tx">{esc(snap["todo"])}</div>')
+    if snap.get("waiting"):
+        out.append(f'<div class="k2">{esc(T("m.wait", lang))}</div><div class="tx">{esc(snap["waiting"])}</div>')
+    parts = [(T(k, lang), snap.get(f)) for k, f in (("m.entry", "entry"), ("m.target", "target"), ("m.invalid", "invalid"))]
+    parts = [f"{a} {b}" for a, b in parts if b]
+    if parts:
+        out.append(f'<div class="tx mono" style="margin-top:6px">{esc(" · ".join(parts))}</div>')
+    if snap.get("why"):
+        out.append(f'<div class="k2">{esc(T("m.why", lang))}</div><div class="why">' + "".join(chip(w) for w in snap["why"]) + "</div>")
+    out.append("</div>")
+    if near:
+        out.append(f'<div class="muted" style="font:400 11px var(--sans);margin:2px 2px 8px">{esc(T("m.near", lang))}: <b>{esc(near[0])}</b> '
+                   f'{fmt(near[1])} ({near[2]:+.1f})</div>')
+    return "".join(out)

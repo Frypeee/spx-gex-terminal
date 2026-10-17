@@ -225,3 +225,36 @@ div[data-testid="stElementContainer"]:has(iframe[srcdoc*="ASHDATAFRAME"]) { posi
   .top { flex-wrap: wrap; }
 }
 [data-testid="stPopoverBody"] { min-width: min(560px, 92vw); }
+
+/* ---- каркас у стилі MenthorQ / TradingView ---- */
+.mqh { display:flex; align-items:baseline; gap:8px; padding:2px 4px 8px; }
+.mqh .a { font:700 13px var(--sans); } .mqh .m { font:500 10px var(--sans); color:var(--muted); letter-spacing:.06em; } .mqh .t { margin-left:auto; font:400 10px var(--mono); color:var(--muted); }
+.mqc { border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:8px; background:color-mix(in srgb, var(--panel) 92%, transparent); }
+.mqc .k { font:600 10px var(--sans); color:var(--muted); text-transform:uppercase; letter-spacing:.07em; margin-bottom:6px; }
+.mqc .k2 { font:600 9.5px var(--sans); color:var(--muted); text-transform:uppercase; letter-spacing:.07em; margin:10px 0 4px; }
+.mqc .big { font:600 21px/1.15 var(--sans); } .mqc .big.up, .mqc .up { color:var(--put); } .mqc .big.dn, .mqc .dn { color:var(--call); }
+.mqc .s { font:400 11.5px/1.45 var(--sans); color:var(--muted); margin-top:3px; } .mqc .tx { font:400 12px/1.5 var(--sans); }
+.mqc .mid { font:600 16px var(--sans); text-align:center; margin:2px 0; } .mqc .s.c { text-align:center; }
+.mqc .row { display:flex; align-items:baseline; justify-content:space-between; } .mqc .row .r { font:500 11px var(--mono); color:var(--muted); }
+.mqc .lbl { display:flex; justify-content:space-between; font:600 9px var(--sans); color:var(--muted); letter-spacing:.06em; margin-top:6px; }
+.mqc .lbl b { display:block; font:500 10.5px var(--mono); letter-spacing:0; margin-top:1px; } .mqc .lbl span:nth-child(2) { text-align:center; } .mqc .lbl span:last-child { text-align:right; }
+.mqc .rng { position:relative; height:5px; border-radius:3px; margin:10px 0 2px; background:color-mix(in srgb, var(--put) 55%, var(--line)); }
+.mqc .rng i, .mqc .pcb i { position:absolute; top:-4px; width:3px; height:13px; background:var(--text, currentColor); border-radius:2px; }
+.mqc .pcb { position:relative; height:5px; border-radius:3px; margin:12px 0 2px; background:linear-gradient(90deg, var(--call), var(--line) 50%, var(--put)); }
+.mqc .two { display:grid; grid-template-columns:1fr 1fr; gap:10px; } .mqc .two .l { font:400 10px var(--sans); color:var(--muted); margin-bottom:2px; } .mqc .two .big { font-size:18px; }
+.mqc .br { display:grid; grid-template-columns:44px 1fr 56px; gap:6px; align-items:center; font:400 10.5px var(--mono); margin:3px 0; }
+.mqc .br .b { height:5px; background:var(--line); border-radius:3px; overflow:hidden; } .mqc .br .b i { display:block; height:100%; } .mqc .br .b i.up { background:var(--put); } .mqc .br .b i.dn { background:var(--call); }
+.mqc .br .v { text-align:right; }
+.mqc.scn.long { background:color-mix(in srgb, var(--put) 12%, transparent); border-color:color-mix(in srgb, var(--put) 45%, transparent); } .mqc.scn.long .big { color:var(--put); }
+.mqc.scn.short { background:color-mix(in srgb, var(--call) 12%, transparent); border-color:color-mix(in srgb, var(--call) 45%, transparent); } .mqc.scn.short .big { color:var(--call); }
+.mqc.scn.wait .big { color:var(--pain); }
+.mqc .why { display:flex; flex-wrap:wrap; gap:4px; }
+.st-key-rail button { width:40px; height:40px; padding:0; border-radius:10px; }
+.st-key-rail { gap:.35rem !important; align-items:center; }
+.st-key-drawer { animation: wd-in .28s ease-out; }
+.nav-h { font:600 10px var(--sans); color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin:14px 0 2px 4px; }
+.st-key-nav button { min-height:34px; font-size:13px; }
+.st-key-tb { border-bottom:1px solid var(--line); padding-bottom:4px; margin-bottom:6px; }
+.st-key-tb .tlabel { font:700 14px var(--sans); }
+.st-key-nav [data-testid="stMarkdownContainer"] { margin-bottom:0 !important; }
+.st-key-nav .nav-h { margin:16px 0 4px 4px; }

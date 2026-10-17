@@ -76,3 +76,24 @@ def clear_levels(url: str | None, token: str | None, inst_key: str) -> None:
             _call(url, token, [["DEL", f"mqlev:{inst_key}"]])
         except Exception:  # noqa: BLE001
             pass
+
+
+def save_note(url: str | None, token: str | None, text: str) -> bool:
+    """Особисті нотатки («Saved»): зберігаються в Upstash, якщо він підключений."""
+    if not (url and token):
+        return False
+    try:
+        _call(url, token, [["SET", "notes:main", json.dumps({"text": text, "saved": int(time.time())})]])
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def load_note(url: str | None, token: str | None) -> str | None:
+    if not (url and token):
+        return None
+    try:
+        raw = _call(url, token, [["GET", "notes:main"]])[0].get("result")
+        return json.loads(raw)["text"] if raw else None
+    except Exception:  # noqa: BLE001
+        return None
