@@ -69,13 +69,14 @@ def ib_box(bars: pd.DataFrame, td, ibh: float | None, ibl: float | None, tf: str
 
 
 TF_SEC = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600}
+CD_SEC = {**TF_SEC, "4h": 14400}     # для таймера до закриття свічки
 LSE_WS = "wss://data-ws.londonstrategicedge.com"
 
 
 def _build_payload(*, title: str, key: str, tf: str, bars: pd.DataFrame, levels: list[dict],
                    profile: list[dict], sv: pd.DataFrame | None, show_vwap: bool, show_cvd: bool,
                    theme: str = "dark", ib: dict | None = None, show_ib: bool = True,
-                   cvd_exact: bool = False, live: dict | None = None) -> dict:
+                   cvd_exact: bool = False, live: dict | None = None, lang: str = "UA") -> dict:
     daily = tf == "1D"
     ts = to_ts(bars.index, daily=daily)
     candles = [
@@ -107,6 +108,7 @@ def _build_payload(*, title: str, key: str, tf: str, bars: pd.DataFrame, levels:
         "title": title, "key": key, "theme": theme, "daily": daily, "candles": candles, "volume": volume,
         "levels": levels, "profile": profile, "vwap": vwap, "cvd": cvd, "delta": delta,
         "ib": ib if show_ib else None, "ib_available": bool(ib), "cvd_exact": cvd_exact,
+        "cd_sec": CD_SEC.get(tf), "lang": lang if lang in ("UA", "EN", "RU") else "UA",
         "default_bars": DEFAULT_BARS.get(tf, 150), "bar_spacing": BAR_SPACING.get(tf, 7),
         "live": ({"url": LSE_WS, "key": live["key"], "symbol": live["symbol"], "tf_sec": TF_SEC[tf]}
                  if live and live.get("key") and live.get("symbol") and tf in TF_SEC else None),

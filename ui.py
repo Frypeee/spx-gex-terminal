@@ -10,6 +10,7 @@ import pandas as pd
 import config as C
 from engine import fmt
 from glossary import tip
+from i18n import t as T
 
 COL = C.COL
 CSS = "<style>" + (Path(__file__).resolve().parent / "style.css").read_text(encoding="utf-8") + "</style>"
@@ -50,22 +51,28 @@ def age_chip(label: str, f, warn_after: float = 180) -> str:
 
 # ---------------------------------------------------------------- шапка
 def header(inst_name: str, spot: float | None, chg: float | None, chg_pct: float | None, sub: str,
-           chips: list[str], gex) -> str:
+           read: dict | None = None, lang: str = "UA") -> str:
+    """Компактна шапка: ціна ліворуч, сценарій Лонг/Шорт праворуч (замість гамми)."""
     if spot is None:
-        price = '<span class="dn">дані недоступні</span>'
+        price = f'<span class="dn">{esc(T("no_data", lang))}</span>'
     else:
         cls = "up" if (chg or 0) >= 0 else "dn"
         sg = "+" if (chg or 0) >= 0 else ""
         price = f'{fmt(spot)}<span class="chg {cls}">{sg}{fmt(chg)} ({sg}{(chg_pct or 0):.2f}%)</span>'
-    if gex is not None:
-        pos = gex.net_total_b >= 0
-        reg = (f'<div class="regime {"pos" if pos else "neg"}"><div class="l">Гамма дилерів{q("Гамма дилерів")}</div>'
-               f'<div class="v">{"Позитивна" if pos else "Негативна"} {"+" if pos else "−"}${abs(gex.net_total_b):.2f}B</div></div>')
-    else:
-        reg = '<div class="regime"><div class="l">Гамма дилерів</div><div class="v muted">н/д</div></div>'
-    return (f'<div class="top"><div><div class="muted" style="font:500 12px var(--sans);margin-bottom:4px">{esc(inst_name)}</div>'
-            f'<h1>{price}</h1><div class="sub">{esc(sub)}</div>'
-            f'<div class="status" style="margin-top:8px">{"".join(chips)}</div></div>{reg}</div>')
+    badge = ""
+    if read:
+        bias = read["bias"]
+        cls = {"LONG": "long", "SHORT": "short", "WAIT": "wait"}[bias]
+        lab = T({"LONG": "long", "SHORT": "short", "WAIT": "wait"}[bias], lang)
+        extra = (T("str." + read["strength"], lang) if bias != "WAIT" else T("none_side", lang))
+        badge = (f'<div class="regime scn-{cls}"><div class="l">{esc(T("scn", lang))}{q("", text=T("tip.scenario", lang))}</div>'
+                 f'<div class="v">{lab}</div><div class="l2">{esc(extra)}</div></div>')
+    return (f'<div class="top"><div><div class="muted" style="font:500 12px var(--sans);margin-bottom:2px">{esc(inst_name)}</div>'
+            f'<h1>{price}</h1><div class="sub">{esc(sub)}</div></div>{badge}</div>')
+
+
+def status_chips(chips: list[str]) -> str:
+    return '<div class="status">' + "".join(chips) + "</div>"
 
 
 # ---------------------------------------------------------------- рівні
@@ -310,53 +317,63 @@ def _card(title: str, body: str, tip: str = "") -> str:
     return f'<div class="sc"><div class="sct">{esc(title)}{q("", text=tip) if tip else ""}</div>{body}</div>'
 
 
-def summary_cards(gex, read: dict | None, spot: float, mq_fut: dict, basis_ok: bool) -> str:
-    """Вкладка «Підсумок»: режим, очікуваний рух, позиціонування дилерів, GEX за терміном, пут/кол, скос."""
+def summary_widgets(gex, read: dict | None, lang: str = "UA") -> list[tuple[str, str, str, str]]:
+    """Віджети правої панелі: (ключ, заголовок, HTML, підказка)."""
+    out: list[tuple[str, str, str, str]] = []
+    if read:
+        bias = read["bias"]
+        cls = {"LONG": "long", "SHORT": "short", "WAIT": "wait"}[bias]
+        lab = T({"LONG": "long", "SHORT": "short", "WAIT": "wait"}[bias], lang)
+        extra = T("str." + read["strength"], lang) if bias != "WAIT" else T("none_side", lang)
+        pos = max(4.0, min(96.0, 50 + read["score"] * 7))
+        body = (f'<div class="bias"><span class="b {cls}">{lab}</span><span class="s">{esc(extra)}</span></div>'
+                f'<div class="meter"><i style="left:calc({pos:.0f}% - 2px)"></i></div>'
+                f'<div class="meter-l"><span>{T("short", lang).title()}</span><span></span><span>{T("long", lang).title()}</span></div>'
+                f'<div class="sub">{esc(T("score", lang))} {read["score"]:+.1f}</div>')
+        out.append(("scenario", T("w.scenario", lang), body, T("tip.scenario", lang)))
     if gex is None:
-        return '<div class="panel"><p class="muted">Немає даних опціонів CBOE: підсумок недоступний.</p></div>'
+        out.append(("regime", T("w.regime", lang), f'<div class="sub">{esc(T("no_cboe", lang))}</div>', ""))
+        return out
     sm = gex.summary
     pos = gex.net_total_b >= 0
     hvl = gex.mq.get("HVL")
     above = hvl is not None and gex.spot >= hvl
-    regime = "Позитивна гамма" if pos else "Негативна гамма"
-    regime_sub = ("дилери гасять рух: діапазон, повернення до середнього" if pos
-                  else "дилери підсилюють рух: тренд, прискорення")
-    hvl_txt = ("" if hvl is None else f"Ціна {'вище' if above else 'нижче'} HVL {fmt(hvl, 0)}")
-    cards = [_card("Режим", f'<div class="big {"up" if pos else "dn"}">{regime}</div><div class="sub">{regime_sub}</div>'
-                   f'<div class="sub">{hvl_txt}</div>', "Знак сумарної гамми дилерів при поточній ціні.")]
+    hvl_txt = "" if hvl is None else f"{T('above_hvl' if above else 'below_hvl', lang)} {fmt(hvl, 0)}"
+    out.append(("regime", T("w.regime", lang),
+                f'<div class="big {"up" if pos else "dn"}">{T("pos_gamma" if pos else "neg_gamma", lang)}</div>'
+                f'<div class="sub">{T("pos_sub" if pos else "neg_sub", lang)}</div><div class="sub">{hvl_txt}</div>', T("tip.regime", lang)))
     if gex.em_1d:
         em = gex.em_1d
-        cards.append(_card("Очікуваний рух (1D)",
-                           f'<div class="big">±{em:.1f} п.</div><div class="sub">±{em / gex.spot * 100:.2f}% · '
-                           f'{fmt(gex.spot - em, 0)} – {fmt(gex.spot + em, 0)}</div>'
-                           f'<div class="sub">ATM IV {gex.atm_iv * 100:.1f}%</div>', "1σ за імпліцитною волатильністю найближчої експірації."))
-    cards.append(_card("Позиціонування дилерів",
-                       f'<div class="big {"up" if pos else "dn"}">{gex.net_total_b:+.2f}B</div>'
-                       f'<div class="sub">Calls {sm["call_b"]:.1f}B · Puts {sm["put_b"]:.1f}B (усі експірації)</div>'
-                       f'<div class="sub">чисте за обраним діапазоном: {gex.net_total_b:+.2f}B на 1%</div>',
-                       "Дилери довгі кол і короткі пут (модельна конвенція). $ млрд зміни дельти-хеджу на 1% руху."))
+        out.append(("em", T("w.em", lang),
+                    f'<div class="big">±{em:.1f}</div><div class="sub">±{em / gex.spot * 100:.2f}% · {fmt(gex.spot - em, 0)} – {fmt(gex.spot + em, 0)}</div>'
+                    f'<div class="sub">ATM IV {gex.atm_iv * 100:.1f}%</div>', T("tip.em", lang)))
+    out.append(("dealers", T("w.dealers", lang),
+                f'<div class="big {"up" if pos else "dn"}">{gex.net_total_b:+.2f}B</div>'
+                f'<div class="sub">Calls {sm["call_b"]:.1f}B · Puts {sm["put_b"]:.1f}B ({T("all_exp", lang)})</div>'
+                f'<div class="sub">{T("net_scope", lang)}: {gex.net_total_b:+.2f}B {T("per_1pct", lang)}</div>', T("tip.dealers", lang)))
     mx = max(1e-9, max(abs(v) for v in sm["by_dte"].values()))
     rows = "".join(
         f'<div class="bar-row"><span>{k}</span><span class="bar"><i style="width:{abs(v) / mx * 100:.0f}%;'
         f'background:{"var(--put)" if v >= 0 else "var(--call)"}"></i></span><span class="mono">{v:+.2f}B</span></div>'
         for k, v in sm["by_dte"].items())
-    cards.append(_card("GEX за терміном до експірації", rows, "Звідки береться гамма: сьогоднішні опціони чи віддалені."))
-    pc = sm.get("pc_oi")
-    pcv = sm.get("pc_vol")
-    pc_txt = "н/д" if pc is None else f"{pc:.2f}"
-    pcv_txt = "н/д" if not pcv else f"{pcv:.2f}"
-    cards.append(_card("Put/Call", f'<div class="big">{pc_txt}</div><div class="sub">за відкритим інтересом</div>'
-                       f'<div class="sub">за обсягом сьогодні: {pcv_txt}</div>',
-                       "Вище 1 більше путів. Це контекст настроїв, а не сигнал."))
+    out.append(("dte", T("w.dte", lang), rows, T("tip.dte", lang)))
+    pc, pcv = sm.get("pc_oi"), sm.get("pc_vol")
+    na = T("na", lang)
+    out.append(("pc", T("w.pc", lang),
+                f'<div class="big">{na if pc is None else f"{pc:.2f}"}</div><div class="sub">{T("by_oi", lang)}</div>'
+                f'<div class="sub">{T("by_vol", lang)}: {na if not pcv else f"{pcv:.2f}"}</div>', T("tip.pc", lang)))
     sk = sm.get("skew")
-    cards.append(_card("Скос (skew)", f'<div class="big">{"н/д" if sk is None else f"{sk:+.1f} п.в."}</div>'
-                       '<div class="sub">IV путу 95% мінус IV колу 105%</div>',
-                       "Чим більший скос, тим дорожче ринок платить за захист від падіння."))
-    if read:
-        lab = {"LONG": "Лонг", "SHORT": "Шорт", "WAIT": "Без переваги"}[read["bias"]]
-        cards.append(_card("Оцінка за методичкою", f'<div class="big">{lab}</div><div class="sub">{esc(read["strength"])} · бал {read["score"]:+.1f}</div>',
-                           "Підсумок усіх факторів сторінки. Це контекст для рішення, не сигнал на вхід."))
-    return '<div class="sg">' + "".join(cards) + "</div>"
+    out.append(("skew", T("w.skew", lang),
+                f'<div class="big">{na if sk is None else f"{sk:+.1f}"}</div><div class="sub">{T("skew_sub", lang)}</div>', T("tip.skew", lang)))
+    return out
+
+
+def summary_cards(gex, read: dict | None, spot: float, mq_fut: dict, basis_ok: bool, lang: str = "UA") -> str:
+    """Сітка карток (використовується в тестах і як запасний варіант)."""
+    ws = summary_widgets(gex, read, lang)
+    if gex is None:
+        return '<div class="panel"><p class="muted">' + esc(T("no_cboe", lang)) + "</p></div>"
+    return '<div class="sg">' + "".join(_card(ti, body, tip_) for _, ti, body, tip_ in ws) + "</div>"
 
 
 # ---------------------------------------------------------------- Рівні й сигнал (монітор у стилі GC LIVE)

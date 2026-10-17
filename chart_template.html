@@ -39,6 +39,8 @@
   #gx button.on { background: #1d3a6b; color: #fff; }
   #gx .solo { border: 1px solid var(--btnbd); border-radius: 5px; }
   #gx select { border: 1px solid var(--btnbd); border-radius: 5px; padding: 5px 8px; }
+  #cd { position: absolute; right: var(--pw); z-index: 6; display: none; text-align: center; box-sizing: border-box;
+        font: 500 11px/17px 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; color: #fff; pointer-events: none; border-radius: 2px; }
   #err { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
          color: #ef9a9a; font: 500 14px 'IBM Plex Sans', sans-serif; text-align: center; padding: 24px; }
 </style>
@@ -53,6 +55,7 @@
   <div id="gx"><span class="ttl" id="gx-t"></span><div class="seg"><button id="gx-all" class="on">Усі серії</button><button id="gx-0">0DTE</button></div>
     <button id="gx-sum" class="solo">Σ крива</button>
     <select id="gx-m"><option value="net">Net GEX</option><option value="call">Call GEX</option><option value="put">Put GEX</option><option value="abs">Call + Put</option></select></div>
+  <div id="cd" title="Час до закриття свічки"></div>
   <div id="err"></div>
 </div>
 <script>__LIB__</script>
@@ -121,6 +124,11 @@
   const rs = document.documentElement.style;
   rs.setProperty('--bg', T.bg); rs.setProperty('--fg', T.fg); rs.setProperty('--muted', T.muted); rs.setProperty('--line', T.line);
   rs.setProperty('--btnbg', T.btnbg); rs.setProperty('--btnfg', T.btnfg); rs.setProperty('--btnbd', T.btnbd);
+  const LT = { EN: { fit: 'Go to latest', fitT: 'Back to current time', reset: 'Reset', resetT: 'Reset zoom', all: 'All series', sum: 'Σ curve', zero: '0DTE', allT: 'ALL SERIES' },
+               RU: { fit: 'К текущему', fitT: 'Вернуться к текущему времени', reset: 'Сбросить', resetT: 'Сбросить масштаб', all: 'Все серии', sum: 'Σ кривая', zero: '0DTE', allT: 'ВСЕ СЕРИИ' } }[P.lang] || null;
+  const setTxt = (id, v, t) => { const n = document.getElementById(id); if (n) { n.textContent = v; if (t) n.title = t; } };
+  if (LT) { setTxt('btn-fit', LT.fit, LT.fitT); setTxt('btn-reset', LT.reset, LT.resetT); setTxt('gx-all', LT.all); setTxt('gx-sum', LT.sum); }
+  else { setTxt('btn-fit', 'До поточного', 'Повернутися до поточного часу'); setTxt('btn-reset', 'Скинути', 'Скинути масштаб'); setTxt('gx-all', 'Усі серії'); setTxt('gx-sum', 'Σ крива'); }
   const el = document.getElementById('chart');
   const FONT = "'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace";
 
@@ -148,6 +156,7 @@
     upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
     wickUpColor: '#26a69a', wickDownColor: '#ef5350',
     priceFormat: { type: 'price', precision: 2, minMove: 0.25 },
+    lastValueVisible: !P.cd_sec,     // за наявності таймера останню ціну малюємо власною міткою разом із відліком
   }, 0);
   candles.setData(P.candles);
 
@@ -229,7 +238,7 @@
   };
   const fmtB = (v) => { const a = Math.abs(v), sg = v < 0 ? '−' : '+';
     return a >= 1 ? sg + a.toFixed(2) + 'B' : a >= 0.001 ? sg + (a * 1000).toFixed(a >= 0.1 ? 0 : 1) + 'M' : sg + (a * 1e6).toFixed(0) + 'k'; };
-  const gxTitle = () => ({ net: 'NET GEX', call: 'CALL GEX', put: 'PUT GEX', abs: 'CALL + PUT GEX' }[gxs.m]) + (gxs.scope === '0' ? ' · 0DTE' : ' · УСІ СЕРІЇ') + ' · $/1%';
+  const gxTitle = () => ({ net: 'NET GEX', call: 'CALL GEX', put: 'PUT GEX', abs: 'CALL + PUT GEX' }[gxs.m]) + (gxs.scope === '0' ? ' · 0DTE' : ' · ' + (LT ? LT.allT : 'УСІ СЕРІЇ')) + ' · $/1%';
   try {
     if (P.profile && P.profile.length) {
       const wrap = document.getElementById('wrap'), side = document.getElementById('side'), cv = document.getElementById('gxc');
@@ -382,7 +391,7 @@
     chart.timeScale().setVisibleLogicalRange(defRange());
     chart.priceScale('right').applyOptions({ autoScale: true });
   };
-  window.__chart = chart; window.__ready = true; window.__cur = () => liveCur;
+  window.__chart = chart; window.__candles = candles; window.__ready = true; window.__cur = () => liveCur;
 
   // ---- Живе оновлення останньої свічки й обсягу з тиків (лише внутрішньоденні ТФ)
   const L = P.live;
@@ -406,7 +415,32 @@
     };
   }
   ensureWs(L && L.tf_sec && !P.daily ? L : null);
-  cleanup = () => { try { chart.remove(); } catch (e) {} };
+  // ---- Таймер до закриття свічки під останньою ціною на шкалі (як у TradingView)
+  const cdEl = document.getElementById('cd'); cdEl.style.display = 'none';
+  let cdTimer = null;
+  if (P.cd_sec && P.candles.length) {
+    const tfs = P.cd_sec;
+    const pad = (n) => (n < 10 ? '0' : '') + n;
+    const tick = () => {
+      const last = liveCur || P.candles[P.candles.length - 1];
+      const wall = kyivWall(Date.now() / 1000);
+      let end = last.time + tfs;
+      if (wall - end > tfs * 3) { cdEl.style.display = 'none'; return; }       // ринок закритий: свічки не йдуть
+      while (end <= wall) end += tfs;
+      const rem = Math.max(0, end - wall);
+      const h = Math.floor(rem / 3600), m = Math.floor((rem % 3600) / 60), sec = rem % 60;
+      cdEl.innerHTML = '<div>' + last.close.toFixed(2) + '</div><div style="opacity:.92">' + (h ? h + ':' + pad(m) + ':' + pad(sec) : pad(m) + ':' + pad(sec)) + '</div>';
+      const y = candles.priceToCoordinate(last.close);
+      let pw = 56; try { pw = chart.priceScale('right').width() || 56; } catch (e) {}
+      if (y == null) { cdEl.style.display = 'none'; return; }
+      cdEl.style.width = pw + 'px';
+      cdEl.style.background = last.close >= last.open ? '#26a69a' : '#ef5350';
+      cdEl.style.top = 'calc(var(--top) + ' + Math.round(y - 9) + 'px)';
+      cdEl.style.display = 'block';
+    };
+    tick(); cdTimer = setInterval(tick, 500);
+  }
+  cleanup = () => { if (cdTimer) clearInterval(cdTimer); try { chart.remove(); } catch (e) {} };
   }
 
   // ---- Запуск: або дані вшиті в сторінку, або сторінка стабільна і бере дані з сусіднього невидимого фрейму
