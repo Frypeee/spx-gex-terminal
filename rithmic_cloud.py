@@ -65,7 +65,7 @@ L6KCq9NjRHDEjf8tM7qtj3u1cIiuPhnPQCjY/MiQu12ZIvVS5ljFH4gxQ+6IHdfG
 jjxDah2nGN59PRbxYvnKkKj9
 -----END CERTIFICATE-----"""
 
-DEFAULT_GATEWAYS = ["wss://rprotocol.rithmic.com:443", "wss://rituz00100.rithmic.com:443"]
+DEFAULT_GATEWAYS = ["wss://rprotocol.rithmic.com:443", "wss://rprotocol-ie.rithmic.com:443", "wss://rprotocol-de.rithmic.com:443", "wss://rituz00100.rithmic.com:443"]
 PREFERRED_SYSTEMS = ("Rithmic 01", "Rithmic 04 Colo", "Rithmic Paper Trading", "Rithmic Test")
 
 # ------------------------------------------------------------------ шаблони й поля (RProtocolAPI 0.90.0.0)
@@ -569,7 +569,7 @@ class Engine:
         code = g_strs(msg, F_RP_CODE)
         if not code or code[0] != "0":
             await ws.close()
-            raise AuthError(f"{system}: {'; '.join(g_strs(msg, F_USER_MSG)) or code}")
+            raise AuthError(f"{system}: код {'/'.join(code) or '?'} · {'; '.join(g_strs(msg, F_USER_MSG)) or 'без тексту'}")
         return ws, (g_dbl(msg, F_HB_INTERVAL) or 30.0)
 
     def _candidates(self, systems_by_uri: dict[str, list[str]]) -> list[tuple[str, str]]:
@@ -646,7 +646,7 @@ class Engine:
             cands = [c for c in self._candidates({u: v for u, v in systems_by_uri.items() if v or pinned}) if c not in tried]
             if not cands and not tried:
                 raise ConnectionError("шлюзи Rithmic недоступні: " + "; ".join(errs))
-            for u, sname in cands[:5]:
+            for u, sname in cands[:3]:
                 if await attempt(u, sname):
                     uri, system = u, sname
                     break
