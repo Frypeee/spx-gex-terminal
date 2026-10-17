@@ -35,6 +35,7 @@ import journal as J
 import gex as G
 import levels as L
 import news as N
+import rithmic_cloud as RC
 from cache import CACHE
 
 COL = C.COL
@@ -76,6 +77,15 @@ UPSTASH_URL, UPSTASH_TOKEN = secret("UPSTASH_URL"), secret("UPSTASH_TOKEN")
 DATABENTO_KEY = secret("DATABENTO_API_KEY")
 FRED_KEY = secret("FRED_API_KEY")
 LSE_BROWSER_KEY = secret("LSE_BROWSER_KEY")      # необов'язково: живі тики LSE прямо в браузері
+
+# Хмарний рушій Rithmic: логін/пароль лише зі Streamlit Secrets (RITHMIC_USER, RITHMIC_PASSWORD); без них рушій не запускається.
+RITHMIC_ENG = None
+if secret("RITHMIC_USER") and (secret("RITHMIC_PASSWORD") or secret("RITHMIC_PASS")):
+    RITHMIC_ENG = RC.ensure_started(RC.Config(
+        user=str(secret("RITHMIC_USER")), password=str(secret("RITHMIC_PASSWORD") or secret("RITHMIC_PASS")),
+        system=str(secret("RITHMIC_SYSTEM", "AUTO")), uri=str(secret("RITHMIC_URI", "") or ""),
+        symbols={"ES": str(secret("RITHMIC_ES", "") or ""), "NQ": str(secret("RITHMIC_NQ", "") or "")},
+        upstash_url=str(UPSTASH_URL or ""), upstash_token=str(UPSTASH_TOKEN or "")))
 
 
 def viewer_email() -> str | None:
@@ -496,6 +506,41 @@ def _uid() -> str:
     return st.session_state.get("uid") or "guest"
 
 
+def _rithmic_diag() -> None:
+    """Стан хмарного рушія Rithmic: докладно лише адміну (система, шлюз, помилки), решті один рядок."""
+    eng = RC.get_engine()
+    if eng is None:
+        return
+    s = eng.status()
+    names = {"live": "підключено", "connecting": "підключення…", "reconnecting": "перепідключення", "auth_failed": "логін відхилено",
+             "starting": "запуск", "crashed": "збій потоку"}
+    if not AU.is_admin(USER, CTX.admin_list):
+        st.caption(f"Rithmic: {names.get(s['state'], s['state'])}")
+        return
+    age = "—" if s["tick_age"] is None else f"{s['tick_age']:.0f} с тому"
+    st.markdown("**Rithmic (хмарний рушій)**")
+    st.caption(f"Стан: {names.get(s['state'], s['state'])} · система: {s['system'] or '—'} · шлюз: {s['uri'] or '—'}")
+    syms = ", ".join(k + " " + (v or "—") for k, v in s["symbols"].items())
+    st.caption(f"Контракти: {syms} · угод: {sum(s['ticks'].values())} · остання: {age}")
+    st.caption(f"Історія: {s['history']} · перепідключень: {s['reconnects']}")
+    if s["error"]:
+        st.caption(f"Помилка: {s['error']}")
+    if s["state"] == "auth_failed" and s["systems"]:
+        st.caption("Доступні системи на шлюзі: " + ", ".join(s["systems"][:30]) + ". Вкажіть свою в Secrets як RITHMIC_SYSTEM (назва як у R|Trader/ATAS).")
+
+
+@st.fragment(run_every="1s")
+def _live_pump(inst_key: str, tf: str) -> None:
+    """Щосекунди віддає графіку стан поточної свічки з пам'яті рушія (OHLC, обсяг, Ask/Bid, Δ). Сам графік не перезавантажується."""
+    eng = RC.get_engine()
+    stt = eng.states.get(inst_key) if eng else None
+    snap = stt.snapshot(CH.TF_SEC[tf]) if stt else None
+    last = st.session_state.get("_lp_seq")
+    if snap and last != (inst_key, tf, snap["seq"]):
+        st.session_state["_lp_seq"] = (inst_key, tf, snap["seq"])
+        render_chart(CH.build_live_tick_frame(inst_key, snap), 1, hidden=True)
+
+
 def _live_ok() -> bool:
     try:
         return AU.can_live(USER, CTX.admin_list, AU.site_cfg(CTX.store))
@@ -555,7 +600,8 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
     now_et = datetime.now(C.ET)
     now_utc = now_et.astimezone(timezone.utc)
 
-    feed = data.price_feed(inst, OANDA_TOKEN, OANDA_ENV, UPSTASH_URL, UPSTASH_TOKEN)
+    rt_ok = _live_ok() or not secret("RITHMIC_REALTIME_ONLY_ALLOWED")      # true у Secrets: Rithmic-дані бачать лише адмін і користувачі з правом live
+    feed = data.price_feed(inst, OANDA_TOKEN, OANDA_ENV, UPSTASH_URL, UPSTASH_TOKEN, rt_ok=rt_ok)
     f1, f5, fd = feed.f1, feed.f5, feed.fd
     fi, fc = data.index_1m(inst.index), data.option_chain(inst.chain)
 
@@ -745,11 +791,11 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
 
         if "CVD" in layers and not cvd_exact and real_delta is not None and len(real_delta):
             t0 = real_delta.index.min().tz_convert(C.KYIV)
-            st.caption(f"CVD~: до {t0:%d.%m %H:%M} (Київ) оцінка за свічками (BVC), далі за тиками LSE (bid/ask). "
+            st.caption(f"CVD~: до {t0:%d.%m %H:%M} (Київ) оцінка за свічками (BVC), далі за тиками Rithmic/LSE (bid/ask). "
                        "Повністю за тиками стане, коли воркер накопичить сесію.")
         elif "CVD" in layers and not cvd_exact:
             st.caption("CVD~ і Delta: оцінка за 1-хвилинними свічками (метод BVC), не точні дані bid/ask. "
-                       "Для CVD за реальними тиками запустіть lse_worker на ПК (див. інструкцію) або підключіть DATABENTO_API_KEY.")
+                       "Для CVD за реальними тиками додайте RITHMIC_USER і RITHMIC_PASSWORD у Secrets (див. RITHMIC.md) або DATABENTO_API_KEY.")
 
     # ---------- панелі справа
     def pn_widgets():
@@ -864,6 +910,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
         st.markdown(f"**{tr('diag.status')}**")
         st.markdown(ui.status_chips(chips), unsafe_allow_html=True)
         st.caption(f"{feed.source} · basis: {basis_src if basis is not None else 'н/д'}")
+        _rithmic_diag()
         st.markdown(f"**{tr('diag.export')}**")
         try:
             if fc.ok and gex is not None:
@@ -1002,3 +1049,6 @@ def fmt_pct(v):
 
 
 terminal(inst_key, tf, scope, sess_mode, basis_override, alert_cfg, theme_type(), st.session_state.get("page", "chart"), chart_h, lang_now())
+
+if st.session_state.get("page", "chart") == "chart" and RC.get_engine() is not None and tf in CH.TF_SEC and _live_ok():
+    _live_pump(inst_key, tf)     # живе оновлення свічки, обсягів, Δ і CVD щосекунди (лише для користувачів із дозволом на live)

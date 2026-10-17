@@ -111,6 +111,7 @@ def _build_payload(*, title: str, key: str, tf: str, bars: pd.DataFrame, levels:
         "ib": ib if show_ib else None, "ib_available": bool(ib), "cvd_exact": cvd_exact,
         "cd_sec": CD_SEC.get(tf), "sym": sym, "uid": uid, "lang": lang if lang in ("UA", "EN", "RU") else "UA",
         "default_bars": DEFAULT_BARS.get(tf, 150), "bar_spacing": BAR_SPACING.get(tf, 7),
+        "tf_sec": TF_SEC.get(tf, 0),
         "live": ({"url": LSE_WS, "key": live["key"], "symbol": live["symbol"], "tf_sec": TF_SEC[tf]}
                  if live and live.get("key") and live.get("symbol") and tf in TF_SEC else None),
     }
@@ -137,6 +138,22 @@ def build_chart_parts(poll_key: str, **kw) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------- рівні для графіка
+def utc_sec_to_kyiv_wall(utc_sec: int) -> int:
+    """UTC-секунди -> «настінний» київський час у секундах (так графік показує Київ)."""
+    return int(to_ts(pd.DatetimeIndex([pd.Timestamp(int(utc_sec), unit="s", tz="UTC")]))[0])
+
+
+def build_live_tick_frame(sym: str, snap: dict | None) -> str:
+    """Невидимий фрейм: щосекунди кладе живий стан поточної свічки (OHLC, обсяг, Ask/Bid, Δ, остання угода) у window.parent.__ASH_LIVE."""
+    if not snap:
+        return "<!doctype html><html><body></body></html>"
+    out = {k: v for k, v in snap.items() if isinstance(v, (int, float, str, bool))}
+    out["bar_time"] = utc_sec_to_kyiv_wall(snap["bar_time_utc"])
+    raw = json.dumps(out, separators=(",", ":"), allow_nan=False).replace("</", "<\\/")
+    return ("<!doctype html><html><body><script>/*ASHDATAFRAME*/try{var p=window.parent;p.__ASH_LIVE=p.__ASH_LIVE||{};"
+            f"p.__ASH_LIVE[{json.dumps(sym)}]={raw};}}catch(e){{}}</script></body></html>")
+
+
 STYLE = {"solid": 0, "dotted": 1, "dashed": 2, "large": 3}
 
 

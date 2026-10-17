@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,6 +15,7 @@ import pandas as pd
 import requests
 
 import config as C
+import rithmic_cloud as RC
 from cache import CACHE, Fetched
 from gex import parse_chain
 from news import parse_calendar, parse_rss
@@ -153,20 +155,67 @@ def mt5_feed(inst: C.Instrument, url: str | None, token: str | None) -> Feed | N
     if age_min > 3 * 1440:          # дані моста мертві (не оновлювались >3 діб) -> Yahoo
         return None
     meta = _BRIDGE_META.get(inst.key, {})
-    lse = meta.get("src") == "LSE"
-    who = "LSE" if lse else "MT5"
+    src = meta.get("src")
+    who = {"LSE": "LSE", "RITHMIC": "Rithmic"}.get(src, "MT5")
     note = "" if age_min < 20 else f"Остання свічка {who} {age_min:.0f} хв тому: ринок закритий або воркер зупинено."
-    label = f"LSE {meta.get('sym', inst.key + '.F')} (ф'ючерс CME, реальний час)" if lse else f"MT5 {inst.key} CFD (реальний час)"
+    if src == "LSE":
+        label = f"LSE {meta.get('sym', inst.key + '.F')} (ф'ючерс CME, реальний час)"
+    elif src == "RITHMIC":
+        label = f"Rithmic {meta.get('sym', inst.key)} (ф'ючерс CME, реальний час)"
+    else:
+        label = f"MT5 {inst.key} CFD (реальний час)"
     return Feed(f1, f5, fd, label, True, note)
 
 
+def cloud_feed(inst: C.Instrument) -> Feed | None:
+    """Свічки з хмарного рушія Rithmic (пам'ять контейнера) + Yahoo для глибини історії до першої хвилини Rithmic.
+    None, якщо рушій не запущено, не підключений або даних ще немає."""
+    eng = RC.get_engine()
+    if eng is None or inst.key not in eng.states:
+        return None
+    st = eng.states[inst.key]
+    df_r = st.to_1m_df()
+    if df_r is None or len(df_r) < 3:
+        return None
+    s = eng.status()
+    fresh = (time.time() - st.last_ts) < 600 if st.last_ts else False
+    if not (s["state"] == "live" or fresh):
+        return None               # рушій не підключений і свіжих тиків немає: нехай працюють інші джерела
+    df_r = clean_bars(df_r)
+    if df_r.empty:
+        return None
+    f1y = futures_1m(inst.fut)
+    if f1y.ok and not f1y.value.empty:
+        df_m1 = pd.concat([f1y.value[f1y.value.index < df_r.index[0]], df_r]).sort_index()
+        df_m1 = df_m1[~df_m1.index.duplicated(keep="last")]
+    else:
+        df_m1 = df_r
+    f5y = futures_5m(inst.fut)
+    df_m5 = _resample(df_m1, "5min")
+    if f5y.ok and not f5y.value.empty and not df_m5.empty:
+        df_m5 = pd.concat([f5y.value[f5y.value.index < df_m5.index[0]], df_m5]).sort_index()
+        df_m5 = df_m5[~df_m5.index.duplicated(keep="last")]
+    age_min = (pd.Timestamp.now(tz="UTC") - df_r.index[-1]).total_seconds() / 60
+    note = "" if age_min < 20 else f"Остання свічка Rithmic {age_min:.0f} хв тому: ринок закритий."
+    _BRIDGE_META[inst.key] = {"sym": st.symbol, "src": "RITHMIC"}
+    return Feed(Fetched(df_m1, 0.0, None), Fetched(df_m5, 0.0, None), futures_daily(inst.fut),
+                f"Rithmic {st.symbol} (ф'ючерс CME, реальний час)", True, note)
+
+
 def price_feed(inst: C.Instrument, token: str | None = None, env: str = "practice",
-               up_url: str | None = None, up_token: str | None = None) -> Feed:
-    """Джерело цін: MT5 (через Upstash) > OANDA CFD > Yahoo (ф'ючерс CME, затримка ~10 хв)."""
+               up_url: str | None = None, up_token: str | None = None, rt_ok: bool = True) -> Feed:
+    """Джерело цін: Rithmic (хмарний рушій) > MT5/LSE/Rithmic-воркер (через Upstash) > OANDA CFD > Yahoo (затримка ~10 хв)."""
     note = ""
+    if rt_ok:       # rt_ok=False: дані Rithmic лише для дозволених користувачів, решті Yahoo із затримкою (вимога ліцензії біржі)
+        try:
+            c = cloud_feed(inst)
+            if c is not None:
+                return c
+        except Exception:  # noqa: BLE001
+            pass
     try:
         m = mt5_feed(inst, up_url, up_token)
-        if m is not None:
+        if m is not None and (rt_ok or _BRIDGE_META.get(inst.key, {}).get("src") != "RITHMIC"):
             return m
     except Exception:  # noqa: BLE001
         pass
@@ -352,24 +401,30 @@ def yardeni_charts() -> Fetched:
 
 
 def real_delta(inst_key: str, url: str | None, token: str | None):
-    """Точна хвилинна дельта з Upstash Redis (її пише rithmic_worker). None, якщо не налаштовано чи порожньо."""
-    if not url or not token:
+    """Точна хвилинна дельта (агресор): Upstash Redis (її пише рушій або воркер) + свіжа пам'ять хмарного рушія.
+    None, якщо жодного джерела немає чи вони порожні."""
+    parts = []
+    eng = RC.get_engine()
+    mem = eng.states[inst_key].to_delta_df() if (eng is not None and inst_key in eng.states) else None
+    if mem is not None and not mem.empty:
+        parts.append(mem)
+    if url and token and (mem is None or len(mem) < 900):       # у пам'яті рушія вже вся сесія: Redis не потрібен
+        try:
+            r = requests.get(f"{url.rstrip('/')}/hgetall/delta:{inst_key}", headers={"Authorization": f"Bearer {token}"}, timeout=6)
+            r.raise_for_status()
+            flat = r.json().get("result") or []
+            rows = {}
+            for k, v in zip(flat[::2], flat[1::2]):
+                b, s_ = v.split(",")
+                rows[pd.Timestamp(int(k), unit="s", tz="UTC")] = (float(b), float(s_))
+            if rows:
+                parts.insert(0, pd.DataFrame.from_dict(rows, orient="index", columns=["buy", "sell"]).sort_index())
+        except Exception:  # noqa: BLE001
+            pass
+    if not parts:
         return None
-    try:
-        import requests
-        r = requests.get(f"{url.rstrip('/')}/hgetall/delta:{inst_key}", headers={"Authorization": f"Bearer {token}"}, timeout=6)
-        r.raise_for_status()
-        flat = r.json().get("result") or []
-        rows = {}
-        for k, v in zip(flat[::2], flat[1::2]):
-            b, s_ = v.split(",")
-            rows[pd.Timestamp(int(k), unit="s", tz="UTC")] = (float(b), float(s_))
-        if not rows:
-            return None
-        df = pd.DataFrame.from_dict(rows, orient="index", columns=["buy", "sell"]).sort_index()
-        return df
-    except Exception:  # noqa: BLE001
-        return None
+    out = pd.concat(parts).sort_index()
+    return out[~out.index.duplicated(keep="last")]
 
 
 # ---------------------------------------------------------------- Databento: точна дельта з агресором

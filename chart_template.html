@@ -21,6 +21,8 @@
   #legend b { color: var(--fg); font-weight: 500; }
   #legend .t { font: 600 13px 'IBM Plex Sans', system-ui, sans-serif; color: var(--fg); margin-right: 8px; }
   #legend .up { color: #26a69a; } #legend .dn { color: #ef5350; }
+  #legend .sep { color: var(--line); margin: 0 5px; }
+  #legend .tape { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; margin-left: 6px; background: rgba(30,42,63,0.75); }
   #tools { position: absolute; left: calc(var(--tl) + 10px); bottom: 44px; z-index: 6; display: flex; gap: 6px; align-items: center; }
   #tools label { display: inline-flex; align-items: center; gap: 5px; color: var(--btnfg); font: 500 11px 'IBM Plex Sans', system-ui, sans-serif;
                  background: var(--btnbg); border: 1px solid var(--btnbd); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
@@ -96,7 +98,7 @@
   const showErr = (m) => { const e = document.getElementById('err'); e.style.display = 'flex'; e.textContent = m; };
   if (!window.LightweightCharts) { showErr('Не вдалося завантажити бібліотеку графіка.'); return; }
   const LW = window.LightweightCharts;
-  let gen = 0, cleanup = null, liveApply = null, liveCfg = null;
+  let gen = 0, cleanup = null, liveApply = null, liveCfg = null, liveCloudApply = null, liveSeq = -1, activeSym = '';
   const VIEWS = {};
 
   // ---- Живі тики LSE прямо в браузері (свічка рухається як у TradingView, без перезавантаження сторінки)
@@ -135,7 +137,8 @@
   LSNS = P.uid ? 'u:' + P.uid + ':' : '';
   gen += 1; const g = gen;
   if (cleanup) { try { cleanup(); } catch (e) {} cleanup = null; }
-  liveApply = null; let liveCur = null, extra = 0;
+  liveApply = null; liveCloudApply = null; liveSeq = -1; activeSym = P.sym || '';
+  let liveCur = null, extra = 0, lastTape = null;
   document.getElementById('err').style.display = 'none';
   ['side', 'gx'].forEach((i) => { document.getElementById(i).style.display = 'none'; });
   document.getElementById('ib-ctl').style.display = 'none';
@@ -353,7 +356,7 @@
     return sg + a.toFixed(0);
   };
   // ---- Нижні панелі: CVD (лінія, скидання на кожній сесії), Delta і Volume (як у NinjaTrader/Sierra)
-  let pane = 1, lastCvd = null;
+  let pane = 1, lastCvd = null, dlSeries = null;
   const stretch = [3.6];
   if (P.cvd && P.cvd.length) {
     P.cvd.forEach((data, i) => {
@@ -369,10 +372,10 @@
     if (lastCvd) lastCvd.createPriceLine({ price: 0, color: T.sep, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
     stretch.push(1.1); pane += 1;
     if (P.delta && P.delta.length) {
-      const dl = chart.addSeries(LW.HistogramSeries, {
+      dlSeries = chart.addSeries(LW.HistogramSeries, {
         priceFormat: { type: 'custom', minMove: 1, formatter: fmtVol }, lastValueVisible: true, priceLineVisible: false, title: 'Delta',
       }, pane);
-      dl.setData(P.delta); stretch.push(0.7); pane += 1;
+      dlSeries.setData(P.delta); stretch.push(0.7); pane += 1;
     }
   }
   const vs = chart.addSeries(LW.HistogramSeries, {
@@ -384,16 +387,37 @@
     stretch.forEach((f, i) => { if (panes[i]) panes[i].setStretchFactor(f); });
   } catch (e) { console.warn('pane sizing failed', e); }
 
+  // ---- Обсяг/Ask/Bid/Δ/CVD по свічках (для легенди й живого оновлення)
+  const barStats = {};
+  const newStat = () => ({ vol: null, delta: null, cvd: null, buy: null, sell: null });
+  (P.volume || []).forEach((x) => { (barStats[x.time] = barStats[x.time] || newStat()).vol = Math.round(x.value || 0); });
+  (P.delta || []).forEach((x) => {
+    const st = (barStats[x.time] = barStats[x.time] || newStat());
+    st.delta = Math.round(x.value || 0);
+    if (st.vol != null && st.vol > 0) { st.buy = Math.max(0, Math.round((st.vol + st.delta) / 2)); st.sell = Math.max(0, st.vol - st.buy); }
+  });
+  const lastCvdChunk = (P.cvd && P.cvd.length) ? P.cvd[P.cvd.length - 1] : [];
+  lastCvdChunk.forEach((x) => { (barStats[x.time] = barStats[x.time] || newStat()).cvd = Math.round(x.value || 0); });
+  let cvdLast = lastCvdChunk.length ? lastCvdChunk[lastCvdChunk.length - 1].value : null;
+
   // ---- Легенда
   const legend = document.getElementById('legend');
   const fmt = (v) => v.toFixed(2);
+  const sg = (v) => (v >= 0 ? '+' : '') + fmtVol(v);
   function renderLegend(bar) {
     if (!bar) { legend.innerHTML = `<span class="t">${P.title}</span>`; return; }
     const up = bar.close >= bar.open, cls = up ? 'up' : 'dn';
-    const chg = bar.close - bar.open;
-    legend.innerHTML = `<span class="t">${P.title}</span>`
+    const chg = bar.close - bar.open, st = barStats[bar.time] || newStat();
+    let h = `<span class="t">${P.title}</span>`
       + `O <b>${fmt(bar.open)}</b> H <b>${fmt(bar.high)}</b> L <b>${fmt(bar.low)}</b> C <b>${fmt(bar.close)}</b> `
       + `<span class="${cls}">${chg >= 0 ? '+' : ''}${fmt(chg)}</span>`;
+    const extra2 = [];
+    if (st.vol != null) extra2.push(`Vol <b>${fmtVol(st.vol)}</b>` + (st.buy != null ? ` (<span class="up">Ask ${fmtVol(st.buy)}</span>·<span class="dn">Bid ${fmtVol(st.sell)}</span>)` : ''));
+    if (st.delta != null) extra2.push(`Δ <b class="${st.delta >= 0 ? 'up' : 'dn'}">${sg(st.delta)}</b>`);
+    if (st.cvd != null) extra2.push(`CVD <b class="${st.cvd >= 0 ? 'up' : 'dn'}">${sg(st.cvd)}</b>`);
+    if (lastTape && bar === lastBar) extra2.push(`<span class="tape ${lastTape.side === 'BUY' ? 'up' : lastTape.side === 'SELL' ? 'dn' : ''}">⚡ ${lastTape.side || 'TICK'} <b>${lastTape.size}</b> @ ${fmt(lastTape.price)}</span>`);
+    if (extra2.length) h += '<br>' + extra2.join('<span class="sep">|</span>');
+    legend.innerHTML = h;
   }
   let lastBar = P.candles[P.candles.length - 1], hover = false;
   renderLegend(lastBar);
@@ -472,6 +496,37 @@
       lastBar = cur; if (!hover) renderLegend(cur);
     };
   }
+  // ---- Живі свічки, обсяг, Ask/Bid, Δ і CVD з хмарного рушія Rithmic (щосекунди через window.parent.__ASH_LIVE)
+  if (!P.daily && P.candles.length && P.tf_sec) {
+    let cb = null;
+    liveCloudApply = (sn) => {
+      if (!sn || sn.tf_sec !== P.tf_sec || !isFinite(sn.price) || sn.price <= 0) return;
+      const b = sn.bar_time, last = liveCur || P.candles[P.candles.length - 1];
+      if (b < last.time) return;
+      const prev = barStats[b] || newStat();
+      if (!cb || cb.time !== b) {
+        // перше оновлення цієї свічки: якщо рушій бачив її не з початку, додаємо вже наявні в графіку обсяг і Δ
+        cb = { time: b, offV: sn.full ? 0 : Math.max(0, (prev.vol || 0) - sn.vol), offD: sn.full ? 0 : ((prev.delta || 0) - sn.delta),
+               cvdBase: (prev.cvd != null && prev.delta != null) ? prev.cvd - prev.delta : cvdLast };
+        if (b > last.time && cvdLast != null) cb.cvdBase = cvdLast;
+      }
+      let cur;
+      if (b === last.time) cur = { time: b, open: last.open, high: Math.max(last.high, sn.high), low: Math.min(last.low, sn.low), close: sn.close };
+      else { cur = { time: b, open: sn.open, high: sn.high, low: sn.low, close: sn.close }; extra += 1; }
+      const vol = sn.vol + cb.offV, dlt = sn.delta + cb.offD;
+      const buy = sn.full ? sn.buy : Math.max(0, Math.round((vol + dlt) / 2)), sell = sn.full ? sn.sell : Math.max(0, vol - buy);
+      const cvd = cb.cvdBase != null ? Math.round(cb.cvdBase + dlt) : null;
+      barStats[b] = { vol, delta: dlt, cvd, buy, sell };
+      if (cvd != null) cvdLast = cvd;
+      liveCur = cur; lastBar = cur;
+      lastTape = sn.size > 0 ? { side: sn.side, size: sn.size, price: sn.price } : lastTape;
+      candles.update(cur);
+      vs.update({ time: b, value: vol, color: cur.close >= cur.open ? 'rgba(38,166,154,0.35)' : 'rgba(239,83,80,0.35)' });
+      if (dlSeries) dlSeries.update({ time: b, value: dlt, color: dlt >= 0 ? 'rgba(38,166,154,0.8)' : 'rgba(239,83,80,0.8)' });
+      if (lastCvd && cvd != null) lastCvd.update({ time: b, value: cvd });
+      if (!hover) renderLegend(cur);
+    };
+  }
   ensureWs(L && L.tf_sec && !P.daily ? L : null);
   // ---- Таймер до закриття свічки під останньою ціною на шкалі (як у TradingView)
   const cdEl = document.getElementById('cd'); cdEl.style.display = 'none';
@@ -530,6 +585,14 @@
       if (d && d.v !== ver) { ver = d.v; try { build(JSON.parse(d.j)); } catch (e) { console.error(e); showErr('Помилка побудови графіка: ' + e.message); } }
     };
     poll(); setInterval(poll, 400);
+    const pump = () => {
+      try {
+        const lv = window.parent.__ASH_LIVE && window.parent.__ASH_LIVE[activeSym];
+        if (lv && liveCloudApply && lv.seq !== liveSeq) { liveSeq = lv.seq; liveCloudApply(lv); }
+      } catch (e) { console.warn('live pump', e && e.message); }
+    };
+    window.__live = () => ({ seq: liveSeq, has: !!liveCloudApply, sym: activeSym });
+    setInterval(pump, 250);
   }
 })();
 </script>
