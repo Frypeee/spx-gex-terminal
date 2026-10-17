@@ -60,30 +60,53 @@ def build_context(snap: dict) -> str:
     return "\n".join(L)
 
 
-def ask(messages: list[dict], context: str, api_key: str, model: str = DEFAULT_MODEL, max_tokens: int = 700) -> tuple[str | None, str | None]:
-    """Повертає (відповідь, помилка)."""
-    if not api_key:
-        return None, "Немає ANTHROPIC_API_KEY у секретах."
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+
+
+def _err_text(r) -> str:
     try:
-        r = requests.post(
-            API_URL, timeout=45,
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": model, "max_tokens": max_tokens, "system": f"{SYSTEM}\n\nПоточний стан:\n{context}", "messages": messages[-12:]},
-        )
+        j = r.json()
+        e = j.get("error", {})
+        return (e.get("message", "") if isinstance(e, dict) else str(e))[:160]
+    except ValueError:
+        return ""
+
+
+def ask(messages: list[dict], context: str, api_key: str, model: str = DEFAULT_MODEL, max_tokens: int = 700,
+        provider: str = "anthropic") -> tuple[str | None, str | None]:
+    """Повертає (відповідь, помилка). provider: anthropic | openai (ключ користувача або сайту)."""
+    if not api_key:
+        return None, "Немає ключа ІІ."
+    system = f"{SYSTEM}\n\nПоточний стан:\n{context}"
+    name = "OpenAI" if provider == "openai" else "Anthropic"
+    try:
+        if provider == "openai":
+            r = requests.post(OPENAI_URL, timeout=45, headers={"Authorization": f"Bearer {api_key}", "content-type": "application/json"},
+                              json={"model": model, "max_tokens": max_tokens,
+                                    "messages": [{"role": "system", "content": system}, *messages[-12:]]})
+        else:
+            r = requests.post(API_URL, timeout=45,
+                              headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                              json={"model": model, "max_tokens": max_tokens, "system": system, "messages": messages[-12:]})
     except requests.RequestException as exc:
         return None, f"Мережа: {type(exc).__name__}"
     if r.status_code == 401:
-        return None, "Ключ Anthropic відхилено (401)."
+        return None, f"Ключ {name} відхилено (401)."
     if r.status_code == 429:
-        return None, "Ліміт запитів Anthropic (429), спробуйте за хвилину."
+        return None, f"Ліміт запитів {name} (429), спробуйте за хвилину."
     if not r.ok:
-        try:
-            msg = r.json().get("error", {}).get("message", "")
-        except ValueError:
-            msg = ""
-        return None, f"Помилка API {r.status_code}. {msg}"[:240]
+        return None, f"Помилка API {r.status_code}. {_err_text(r)}"[:240]
     try:
+        if provider == "openai":
+            text = (r.json()["choices"][0]["message"].get("content") or "").strip()
+            return (text or None), (None if text else "Порожня відповідь.")
         parts = [b["text"] for b in r.json().get("content", []) if b.get("type") == "text"]
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, IndexError):
         return None, "Незрозуміла відповідь API."
     return ("\n".join(parts).strip() or None), (None if parts else "Порожня відповідь.")
+
+
+def check_key(api_key: str, provider: str, model: str) -> str | None:
+    """Мінімальний запит для перевірки ключа. None якщо ключ працює, інакше текст помилки."""
+    text, err = ask([{"role": "user", "content": "ok"}], "перевірка ключа", api_key, model, max_tokens=8, provider=provider)
+    return None if text else (err or "Ключ не працює.")

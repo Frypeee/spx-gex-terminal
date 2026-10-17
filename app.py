@@ -26,6 +26,9 @@ import config as C
 import data, ui
 import i18n as I
 import strikes as SK
+import accounts_ui as ACC
+import auth as AU
+import store as STORE
 import engine as E
 import flow as FL
 import journal as J
@@ -46,7 +49,8 @@ BAR_CAP = {"5m": 2500, "15m": 2200, "30m": 1800, "1h": 1500, "4h": 600}
 ALL_LEVELS = ["Call Resistance", "Put Support", "HVL", "1D Min", "1D Max", "Call Resistance 0DTE", "Put Support 0DTE",
               "HVL 0DTE", "Gamma Wall 0DTE", "MAX PAIN", "PIN", "VWAP", "PDH", "PDL", "OVNH", "OVNL",
               "IBH", "IBL", "VAH", "POC", "VAL", "NYM", "DO", "RTH open", "PWH", "PWL"]
-AI_LIMIT = 40
+AI_LIMIT = 40          # запитів за сесію на спільному ключі сайту
+AI_LIMIT_OWN = 300     # на власному ключі користувача
 
 
 def secret(name: str, default=None):
@@ -83,6 +87,27 @@ def viewer_email() -> str | None:
     except Exception:  # noqa: BLE001
         return None
 TG_TOKEN, TG_CHAT = secret("TELEGRAM_BOT_TOKEN"), secret("TELEGRAM_CHAT_ID")
+
+
+# ------------------------------------------------------------------ акаунти: вхід обов'язковий
+def _google_configured() -> bool:
+    try:
+        return hasattr(st, "login") and "auth" in st.secrets and bool(st.secrets["auth"].get("client_id") or len(st.secrets["auth"]) > 0)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _make_vault():
+    try:
+        return AU.Vault(str(secret("APP_SECRET") or UPSTASH_TOKEN or "dev-only-secret"))
+    except Exception:  # noqa: BLE001: немає пакета cryptography
+        return None
+
+
+CTX = ACC.Ctx(store=STORE.get_store(UPSTASH_URL, UPSTASH_TOKEN), vault=_make_vault(), admin_list=AU.parse_admin_list(secret("ADMIN_USERS")),
+              google=_google_configured(), site_ai_key=ANTHROPIC_KEY, disabled=os.environ.get("ASH_AUTH_DISABLED") == "1")
+USER = ACC.gate(CTX)                 # без входу показує сторінку входу й зупиняє скрипт
+ACC.load_state(CTX, USER)            # особисті налаштування користувача
 
 
 # ------------------------------------------------------------------ мова, звук
@@ -133,7 +158,7 @@ def _go(page: str, inst: str | None = None) -> None:
         ss["inst"] = inst
 
 
-def sidebar() -> dict:
+def sidebar(user: dict) -> dict:
     ss = st.session_state
     ss.setdefault("chat", [])
     ss.setdefault("ai_used", 0)
@@ -141,6 +166,7 @@ def sidebar() -> dict:
     ss.setdefault("page", "chart")
     ss.setdefault("inst", "ES")
     with st.sidebar:
+        ACC.user_card(CTX, user, _go)
         st.markdown(f"### {tr('app')}")
         st.radio("Language", I.LANGS, horizontal=True, key="lang", label_visibility="collapsed")
         with st.container(key="nav"):
@@ -159,11 +185,18 @@ def sidebar() -> dict:
                           type="primary" if ss["page"] == k else "tertiary", on_click=_go, args=(k,))
         st.divider()
         st.markdown(f"##### {tr('sec.assistant')}")
-        if not ANTHROPIC_KEY:
-            st.info("Щоб увімкнути, додайте `ANTHROPIC_API_KEY` у Streamlit Secrets (Manage app → Settings → Secrets).")
+        ai = ACC.ai_for(CTX, user)
+        if ai is None:
+            st.info(ACC.tr("a.p.ai_none"))
+            st.button(ACC.tr("a.p.ai_go"), key="ai_go", icon=":material/smart_toy:", on_click=_go, args=("profile",))
         else:
-            model_name = st.selectbox("Модель", list(AI.MODELS), key="ai_model", help="Haiku швидша й дешевша, Sonnet точніша.")
-            model = AI.MODELS[model_name]
+            if ai["source"] == "site":
+                model_name = st.selectbox("Модель", list(AI.MODELS), key="ai_model", help="Haiku швидша й дешевша, Sonnet точніша.")
+                model = AI.MODELS[model_name]
+            else:
+                model = ai["model"]
+                st.caption(f"{AU.PROVIDERS.get(ai['provider'], {}).get('name', ai['provider'])} · {model}")
+            limit = AI_LIMIT if ai["source"] == "site" else AI_LIMIT_OWN
             c1, c2 = st.columns(2)
             quick = None
             if c1.button("Що робити зараз?", use_container_width=True):
@@ -174,20 +207,20 @@ def sidebar() -> dict:
             prompt = typed or quick
             if prompt:
                 snap = ss.get("snap_ai")
-                if ss["ai_used"] >= AI_LIMIT:
-                    st.warning(f"Ліміт {AI_LIMIT} запитів за сесію вичерпано. Оновіть сторінку.")
+                if ss["ai_used"] >= limit:
+                    st.warning(f"Ліміт {limit} запитів за сесію вичерпано. Оновіть сторінку.")
                 elif snap is None:
                     st.warning("Дані ще завантажуються, спробуйте за кілька секунд.")
                 else:
                     ss["chat"].append({"role": "user", "content": prompt})
                     with st.spinner("Думаю…"):
-                        text, err = AI.ask(ss["chat"][-8:], AI.build_context(snap), ANTHROPIC_KEY, model)
+                        text, err = AI.ask(ss["chat"][-8:], AI.build_context(snap), ai["key"], model, provider=ai["provider"])
                     ss["ai_used"] += 1
                     ss["chat"].append({"role": "assistant", "content": text or f"Не вдалося отримати відповідь. {err}"})
             for m in ss["chat"][-8:]:
                 with st.chat_message(m["role"]):
                     st.markdown(m["content"])
-            st.caption(f"Запитів: {ss['ai_used']} з {AI_LIMIT}. Помічник бачить лише поточний стан сторінки.")
+            st.caption(f"Запитів: {ss['ai_used']} з {limit}. Помічник бачить лише поточний стан сторінки.")
             if ss["chat"] and st.button("Очистити чат", key="ai_clear"):
                 ss["chat"] = []
                 st.rerun()
@@ -251,12 +284,20 @@ def _open_panel(name: str) -> None:
     st.session_state["page"] = "chart"
 
 
-alert_cfg = sidebar()
+alert_cfg = sidebar(USER)
 inst_key = st.session_state["inst"]
 ss0 = st.session_state
 ss0.setdefault("vis_layers", {"VWAP", "CVD", "IB", "Профіль", "Gamma", "Рівні"})
 ss0.setdefault("vis_hidden", set())
 ss0.setdefault("rpanel", "widgets")
+
+if ss0.get("page") in ("profile", "admin"):          # кабінет і адмінка: без графіка й обчислень ринку
+    if ss0["page"] == "profile":
+        USER = ACC.profile_page(CTX, USER)
+    else:
+        ACC.admin_page(CTX, USER)
+    ACC.save_state(CTX)
+    st.stop()
 
 with st.container(key="tb"):
     tb = st.columns([0.9, 3.4, 1.2, 0.5, 4], vertical_alignment="center", gap="small")
@@ -450,12 +491,65 @@ def _lvl_group(n: str) -> str:
 FL_TITLE = "Чекпоінти дня"
 
 
+# ------------------------------------------------------------------ особисті дані користувача (рівні MenthorQ, нотатки)
+def _uid() -> str:
+    return st.session_state.get("uid") or "guest"
+
+
+def _live_ok() -> bool:
+    try:
+        return AU.can_live(USER, CTX.admin_list, AU.site_cfg(CTX.store))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _mq_load(inst: str):
+    try:
+        return AU.load_levels(CTX.store, _uid(), inst)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _mq_save(inst: str, levels: dict) -> bool:
+    try:
+        AU.save_levels(CTX.store, _uid(), inst, levels)
+        return bool(getattr(CTX.store, "persistent", False)) or CTX.disabled
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _mq_clear(inst: str) -> None:
+    try:
+        AU.clear_levels(CTX.store, _uid(), inst)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _note_load() -> str:
+    try:
+        txt = AU.load_note(CTX.store, _uid())
+        if txt is None and AU.is_admin(USER, CTX.admin_list):       # перенесення старої спільної нотатки власника
+            txt = MQ.load_note(UPSTASH_URL, UPSTASH_TOKEN)
+        return txt or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _note_save(text: str) -> bool:
+    try:
+        AU.save_note(CTX.store, _uid(), text)
+        return bool(getattr(CTX.store, "persistent", False)) or CTX.disabled
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # ------------------------------------------------------------------ головна панель
 @st.fragment(run_every=REFRESH)
 def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override: float, alert_cfg: dict, theme: str,
              page: str = "chart", chart_h: int = 720, lang: str = "UA"):
     tr = lambda k: I.t(k, lang)  # noqa: E731: переклад для цього виклику
     ss = st.session_state
+    ACC.heartbeat(CTX)                 # «онлайн» + перевірка блокування (раз на хвилину)
     layers, hidden = ss["vis_layers"], ss["vis_hidden"]
     inst = C.INSTRUMENTS[inst_key]
     now_et = datetime.now(C.ET)
@@ -533,7 +627,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
     # Рівні
     mq_state = st.session_state.setdefault("mq_manual", {})
     if inst.key not in mq_state:
-        mq_state[inst.key] = MQ.load_levels(UPSTASH_URL, UPSTASH_TOKEN, inst.key) or {}
+        mq_state[inst.key] = _mq_load(inst.key) or {}
     mqd = mq_state.get(inst.key) or {}
     mqm = mqd.get("levels") or None
     spec, table_rows, eng_levels = _build_levels(inst, layers, gex, basis, key, vwap, spot, scope, mqm, hidden)
@@ -643,7 +737,8 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
             title=f"{inst.key}1!  {tf}", key=f"{inst.key}_{tf}", tf=tf, bars=bars, levels=spec, profile=profile,
             sv=sv_disp, show_vwap="VWAP" in layers, show_cvd="CVD" in layers, theme=theme, ib=ib,
             show_ib="IB" in layers, cvd_exact=cvd_exact, lang=lang, sym=inst.key,
-            live={"key": LSE_BROWSER_KEY, "symbol": lse_sym} if (LSE_BROWSER_KEY and lse_sym and viewer_email()) else None)   # ключ лише для авторизованих
+            live={"key": LSE_BROWSER_KEY, "symbol": lse_sym} if (LSE_BROWSER_KEY and lse_sym and _live_ok()) else None,   # ключ лише тим, кому видано дозвіл
+            uid=ss.get("uid") or "")
         stub, blob = CH.build_chart_parts(f"{inst.key}_{tf}", **ch_kw)
         render_chart(stub, chart_h)      # сторінка графіка стабільна: браузер її не перезавантажує
         render_chart(blob, 1, hidden=True)   # невидимий фрейм: передає свіжі дані в графік
@@ -751,7 +846,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
             lv = parsed.get(inst.key) or parsed.get("*")
             if lv:
                 mq_state[inst.key] = {"levels": lv, "saved": int(time.time())}
-                saved = MQ.save_levels(UPSTASH_URL, UPSTASH_TOKEN, inst.key, lv)
+                saved = _mq_save(inst.key, lv)
                 st.session_state["mq_note"] = (f"Прийнято {len(lv)} рівнів для {inst.key}."
                                                + ("" if saved else " Збережено лише на цей сеанс (немає Upstash)."))
                 st.rerun(scope="fragment")
@@ -759,7 +854,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
                 st.warning(f"У тексті не знайдено рівнів для {inst.key}. Перевірте, що вставлено рядок із «${inst.key}1!: …».")
         if c_b.button("Прибрати", key=f"mq_clear_{inst.key}"):
             mq_state[inst.key] = {}
-            MQ.clear_levels(UPSTASH_URL, UPSTASH_TOKEN, inst.key)
+            _mq_clear(inst.key)
             st.rerun(scope="fragment")
         if st.session_state.get("mq_note"):
             st.success(st.session_state.pop("mq_note"))
@@ -843,11 +938,11 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
     def page_saved():
         page_wrap(tr("p.saved"))
         if "notes" not in ss:
-            ss["notes"] = MQ.load_note(UPSTASH_URL, UPSTASH_TOKEN) or ""
+            ss["notes"] = _note_load()
         txt = st.text_area(tr("s.notes"), value=ss["notes"], height=420, key="notes_area")
         if st.button(tr("s.save"), key="notes_save", icon=":material/save:"):
             ss["notes"] = txt
-            st.success(tr("s.saved_ok") if MQ.save_note(UPSTASH_URL, UPSTASH_TOKEN, txt) else tr("s.saved_local"))
+            st.success(tr("s.saved_ok") if _note_save(txt) else tr("s.saved_local"))
 
     RAIL = [("widgets", "dashboard", pn_widgets), ("news", "newspaper", pn_news), ("method", "psychology", pn_method),
             ("levels", "format_list_numbered", pn_levels), ("layers", "layers", pn_layers), ("macro", "public", pn_macro)]
@@ -873,6 +968,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
                 for k, icon, _ in RAIL:
                     st.button("", key=f"rail_{k}", icon=f":material/{icon}:", help=tr("r." + k), use_container_width=True,
                               type="primary" if rp == k else "tertiary", on_click=_toggle_rail, args=(k,))
+        ACC.save_state(CTX)
 
     if page in pages:
         pages[page]()
@@ -898,6 +994,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
                 '(затримка ~15 хв) і поточною ціною; конвенція: дилери довгі кол-опціони й короткі пут-опціони. '
                 'Назви рівнів за схемою MenthorQ; розрахунок власний, не копія їхніх даних. Графік: TradingView Lightweight Charts™.</p>',
                 unsafe_allow_html=True)
+    ACC.save_state(CTX)
 
 
 def fmt_pct(v):

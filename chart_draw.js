@@ -1,5 +1,5 @@
 /* Інструменти малювання у стилі TradingView поверх Lightweight Charts.
-   Малюнки зберігаються в localStorage за інструментом (час + ціна), тому переживають автооновлення й зміну таймфрейму.
+   Малюнки зберігаються в window.__LS за інструментом (час + ціна), тому переживають автооновлення й зміну таймфрейму.
    Підключення: ASHDRAW.attach({chart, candles, P, el, T, dark}) викликається щоразу, коли графік перебудовується. */
 (function () {
   const D = (id) => document.getElementById(id);
@@ -43,8 +43,8 @@
   const svg = (k) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">${ICON[k]}</svg>`;
 
   // ---------- збереження
-  const load = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v == null ? d : v; } catch (e) { return d; } };
-  const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+  const load = (k, d) => { try { const v = JSON.parse(window.__LS.getItem(k) || 'null'); return v == null ? d : v; } catch (e) { return d; } };
+  const save = (k, v) => { try { window.__LS.setItem(k, JSON.stringify(v)); } catch (e) {} };
   const persist = () => save(LS_D + S.inst, S.drawings);
   const persistState = () => save(LS_S, { hide: S.hide, lock: S.lock, magnet: S.magnet, style: S.style });
   function commit() {

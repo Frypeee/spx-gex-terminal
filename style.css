@@ -287,3 +287,16 @@ div[data-testid="stElementContainer"]:has(iframe[srcdoc*="ASHDATAFRAME"]) { posi
   [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:has(.st-key-side), [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:has(.st-key-side):has(.dr-off) { flex:1 1 100% !important; width:100% !important; }
   [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .st-key-side) > [data-testid="stColumn"]:not(:has(.st-key-side)) { flex:1 1 100% !important; }
 }
+
+/* ---- акаунти */
+.auth-h { text-align:center; margin:7vh 0 14px; }
+.auth-t { font:700 28px/1.15 var(--sans); letter-spacing:-.01em; }
+.auth-s { font:400 13.5px var(--sans); color:var(--muted); margin-top:6px; }
+.auth-or { display:flex; align-items:center; gap:10px; margin:12px 0 4px; color:var(--muted); font:500 11px var(--sans); text-transform:uppercase; letter-spacing:.08em; }
+.auth-or::before, .auth-or::after { content:""; flex:1; height:1px; background:var(--line); }
+.ucard { display:flex; align-items:center; gap:10px; padding:2px 2px 8px; }
+.ucard .ui b { display:block; font:600 13.5px var(--sans); }
+.ucard .ui span { font:400 11.5px var(--sans); color:var(--muted); }
+.av { border-radius:50%; object-fit:cover; border:1px solid var(--line); flex:none; }
+.av0 { display:flex; align-items:center; justify-content:center; font-family:var(--sans); font-weight:600; background:color-mix(in srgb, var(--flip) 28%, transparent); }
+.st-key-ckie { position:fixed !important; width:1px; height:1px; opacity:0; overflow:hidden; pointer-events:none; left:0; bottom:0; }

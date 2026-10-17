@@ -87,6 +87,10 @@
 <script>__DRAW__</script>
 <script>
 (function () {
+  // localStorage з префіксом користувача: малюнки, пресети й масштаб різних акаунтів не змішуються
+  const _LS = (() => { try { return window.localStorage; } catch (e) { return { getItem() { return null; }, setItem() {}, removeItem() {} }; } })();
+  let LSNS = '';
+  window.__LS = { getItem: (k) => _LS.getItem(LSNS + k), setItem: (k, v) => _LS.setItem(LSNS + k, v), removeItem: (k) => _LS.removeItem(LSNS + k) };
   const INLINE = __PAYLOAD__;
   const POLL_KEY = __POLLKEY__;
   const showErr = (m) => { const e = document.getElementById('err'); e.style.display = 'flex'; e.textContent = m; };
@@ -128,6 +132,7 @@
   }
 
   function build(P) {
+  LSNS = P.uid ? 'u:' + P.uid + ':' : '';
   gen += 1; const g = gen;
   if (cleanup) { try { cleanup(); } catch (e) {} cleanup = null; }
   liveApply = null; let liveCur = null, extra = 0;
@@ -213,7 +218,7 @@
   // ---- Зона Initial Balance: напівпрозорий прямокутник між IBL і IBH
   const IBK = 'ashelper:ib';
   let ibState = { on: true, color: '#4c8dff' };
-  try { const sv = JSON.parse(localStorage.getItem(IBK) || 'null'); if (sv) ibState = Object.assign(ibState, sv); } catch (e) {}
+  try { const sv = JSON.parse(window.__LS.getItem(IBK) || 'null'); if (sv) ibState = Object.assign(ibState, sv); } catch (e) {}
   const hexA = (hex, a) => { const m = /#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(hex) || []; return `rgba(${parseInt(m[1],16)},${parseInt(m[2],16)},${parseInt(m[3],16)},${a})`; };
   class IbRenderer {
     constructor(src) { this.s = src; }
@@ -249,7 +254,7 @@
     const ctl = document.getElementById('ib-ctl'); ctl.style.display = 'inline-flex';
     const on = document.getElementById('ib-on'), col = document.getElementById('ib-col');
     on.checked = ibState.on; col.value = ibState.color;
-    const save = () => { try { localStorage.setItem(IBK, JSON.stringify(ibState)); } catch (e) {} if (ibPrim) ibPrim.refresh(); };
+    const save = () => { try { window.__LS.setItem(IBK, JSON.stringify(ibState)); } catch (e) {} if (ibPrim) ibPrim.refresh(); };
     on.onchange = () => { ibState.on = on.checked; save(); };
     col.oninput = () => { ibState.color = col.value; save(); };
     if (P.ib) { try { ibPrim = new IbPrimitive(P.ib); candles.attachPrimitive(ibPrim); } catch (e) { console.warn('ib primitive failed', e); } }
@@ -258,7 +263,7 @@
   // ---- GEX за страйками: окремий віджет праворуч від графіка, вирівняний по тій самій ціновій шкалі
   const GXK = 'ashelper:gx';
   const gxs = { scope: 'all', sum: false, m: 'net' };
-  try { Object.assign(gxs, JSON.parse(localStorage.getItem(GXK) || '{}')); } catch (e) {}
+  try { Object.assign(gxs, JSON.parse(window.__LS.getItem(GXK) || '{}')); } catch (e) {}
   const gxVal = (r) => {
     const z = gxs.scope === '0', c = z ? r.zc : r.c, p = z ? r.zp : r.p, n = z ? r.z : r.v;
     return gxs.m === 'call' ? c : gxs.m === 'put' ? -p : gxs.m === 'abs' ? c + p : n;
@@ -329,7 +334,7 @@
         document.getElementById('gx-0').classList.toggle('on', gxs.scope === '0');
         document.getElementById('gx-sum').classList.toggle('on', gxs.sum);
         document.getElementById('gx-m').value = gxs.m; ttl.textContent = gxTitle();
-        try { localStorage.setItem(GXK, JSON.stringify(gxs)); } catch (e) {}
+        try { window.__LS.setItem(GXK, JSON.stringify(gxs)); } catch (e) {}
         draw(true);
       };
       document.getElementById('gx-all').onclick = () => { gxs.scope = 'all'; sync(); };
@@ -398,7 +403,7 @@
     renderLegend(bar || lastBar);
   });
 
-  // ---- Масштаб: пам'ять у вікні iframe (переживає перебудову графіка) + localStorage (переживає перезавантаження).
+  // ---- Масштаб: пам'ять у вікні iframe (переживає перебудову графіка) + window.__LS (переживає перезавантаження).
   // Позиція по часу зберігається відносно останньої свічки, ручна вертикальна шкала — як діапазон цін.
   const KEY = 'ashelper:view:' + P.key;
   const V = (VIEWS[KEY] = VIEWS[KEY] || {});
@@ -407,7 +412,7 @@
   let range = defRange();
   if (V.f == null) {
     try {
-      const sv = JSON.parse(localStorage.getItem(KEY) || 'null');
+      const sv = JSON.parse(window.__LS.getItem(KEY) || 'null');
       if (sv && isFinite(sv.f) && isFinite(sv.t)) { V.f = sv.f; V.t = sv.t; V.pr = sv.pr || null; }
     } catch (e) {}
   }
@@ -424,7 +429,7 @@
   };
   requestAnimationFrame(() => { reapply(); requestAnimationFrame(reapply); });
   setTimeout(reapply, 150);
-  const saveView = () => { try { localStorage.setItem(KEY, JSON.stringify({ f: V.f, t: V.t, pr: V.pr || null })); } catch (e) {} };
+  const saveView = () => { try { window.__LS.setItem(KEY, JSON.stringify({ f: V.f, t: V.t, pr: V.pr || null })); } catch (e) {} };
   chart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
     if (!r) return;
     V.f = r.from - lastIdx - extra; V.t = r.to - lastIdx - extra; saveView();
@@ -440,7 +445,7 @@
   }, 400);
   document.getElementById('btn-fit').onclick = () => chart.timeScale().scrollToRealTime();
   document.getElementById('btn-reset').onclick = () => {
-    V.f = V.t = null; V.pr = null; try { localStorage.removeItem(KEY); } catch (e) {}
+    V.f = V.t = null; V.pr = null; try { window.__LS.removeItem(KEY); } catch (e) {}
     chart.timeScale().setVisibleLogicalRange(defRange());
     chart.priceScale('right').applyOptions({ autoScale: true });
   };

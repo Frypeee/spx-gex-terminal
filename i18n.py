@@ -180,6 +180,9 @@ _D: dict[str, tuple[str, str, str]] = {
     "diag.basis": ("Ручний basis (ф'ючерс − індекс). 0 = автоматично", "Manual basis (futures − index). 0 = automatic", "Ручной basis (фьючерс − индекс). 0 = автоматически"),
 }
 
+from i18n_acc import D as _ACC  # noqa: E402
+_D.update(_ACC)
+
 # відображення внутрішніх назв шарів
 _LAYER = {"Рівні": ("Рівні", "Levels", "Уровни"), "Профіль": ("Профіль", "Profile", "Профиль")}
 
