@@ -61,8 +61,6 @@ def strike_chart(prof: pd.DataFrame, spot: float, mq: dict, lang: str = "UA", mo
     layers = [bars]
     spot_df = pd.DataFrame({"strike": [float(spot)], "label": [f"{T('strikes.spot', lang)} {spot:.0f}"]})
     layers.append(alt.Chart(spot_df).mark_rule(color="#4c8dff", strokeWidth=1.5).encode(x="strike:Q"))
-    layers.append(alt.Chart(spot_df).mark_text(color="#4c8dff", align="left", dx=4, dy=-4, baseline="top", fontSize=11, y=0)
-                  .encode(x="strike:Q", text="label:N"))
     if len(ks):
         lv = ks[ks["kind"] == "level"]
         if len(lv):
@@ -77,4 +75,4 @@ def strike_chart(prof: pd.DataFrame, spot: float, mq: dict, lang: str = "UA", mo
             tp["y"] = tp["net"].fillna(0)
             layers.append(alt.Chart(tp).mark_text(dy=-6, fontSize=10).encode(
                 x="strike:Q", y="y:Q", text="label:N", color=alt.Color("color:N", scale=None)))
-    return alt.layer(*layers).properties(height=height).configure_view(strokeWidth=0).configure_axis(grid=True, gridOpacity=0.15)
+    return alt.layer(*layers).properties(height=height, title=alt.TitleParams(spot_df['label'][0], anchor='end', color='#4c8dff', fontSize=11, fontWeight='normal', offset=4)).configure_view(strokeWidth=0).configure_axis(grid=True, gridOpacity=0.15)

@@ -5,8 +5,12 @@
 """
 from __future__ import annotations
 
+import json
 import math
 import re
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 import xml.etree.ElementTree as ET_XML
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -147,3 +151,51 @@ def for_asset(items: list[dict], key: str) -> list[dict]:
         if any(k in low for k in kws) or (set(it.get("tags", [])) & MACRO_TAGS and it.get("high")) or (key == "NQ" and "AI" in it.get("tags", [])):
             out.append(it)
     return out
+
+
+# ---------------------------------------------------------------- переклад заголовків
+_TR_CACHE: dict[tuple[str, str], str] = {}
+_TR_LANG = {"UA": "uk", "RU": "ru"}
+
+
+def _translate_one(text: str, tl: str) -> str:
+    """Переклад одного рядка через публічний endpoint Google Translate; при будь-якій помилці повертає оригінал."""
+    k = (tl, text)
+    if k in _TR_CACHE:
+        return _TR_CACHE[k]
+    try:
+        url = "https://translate.googleapis.com/translate_a/single?" + urllib.parse.urlencode(
+            {"client": "gtx", "sl": "auto", "tl": tl, "dt": "t", "q": text})
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=4) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        out = "".join(seg[0] for seg in data[0] if seg and seg[0]).strip()
+        if out:
+            _TR_CACHE[k] = out
+            return out
+    except Exception:  # noqa: BLE001
+        pass
+    try:  # запасний сервіс
+        url = "https://api.mymemory.translated.net/get?" + urllib.parse.urlencode({"q": text, "langpair": f"en|{tl}"})
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=4) as r:
+            out = str(json.loads(r.read().decode("utf-8")).get("responseData", {}).get("translatedText", "")).strip()
+        if out and "MYMEMORY" not in out.upper():
+            _TR_CACHE[k] = out
+            return out
+    except Exception:  # noqa: BLE001
+        pass
+    return text
+
+
+def translate_titles(titles: list[str], lang: str) -> list[str]:
+    """Заголовки мовою інтерфейсу. EN повертається без змін; результати кешуються на час роботи процесу."""
+    tl = _TR_LANG.get(lang)
+    if not tl or not titles:
+        return list(titles)
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        return list(ex.map(lambda x: _translate_one(x, tl), titles))
+
+
+def localize(items: list[dict], lang: str) -> list[dict]:
+    """Копії записів із перекладеним title; оригінал лишається в orig."""
+    tr = translate_titles([it["title"] for it in items], lang)
+    return [{**it, "title": new, "orig": it["title"]} for it, new in zip(items, tr)]

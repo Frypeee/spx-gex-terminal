@@ -93,6 +93,7 @@
   if (!window.LightweightCharts) { showErr('Не вдалося завантажити бібліотеку графіка.'); return; }
   const LW = window.LightweightCharts;
   let gen = 0, cleanup = null, liveApply = null, liveCfg = null;
+  const VIEWS = {};
 
   // ---- Живі тики LSE прямо в браузері (свічка рухається як у TradingView, без перезавантаження сторінки)
   let ws = null, wsKey = '', wsStop = false;
@@ -397,23 +398,49 @@
     renderLegend(bar || lastBar);
   });
 
-  // ---- Масштаб: зберігаємо відносно останньої свічки, щоб автооновлення не скидало перегляд
+  // ---- Масштаб: пам'ять у вікні iframe (переживає перебудову графіка) + localStorage (переживає перезавантаження).
+  // Позиція по часу зберігається відносно останньої свічки, ручна вертикальна шкала — як діапазон цін.
   const KEY = 'ashelper:view:' + P.key;
+  const V = (VIEWS[KEY] = VIEWS[KEY] || {});
   const lastIdx = P.candles.length - 1;
   const defRange = () => ({ from: Math.max(0, lastIdx - P.default_bars), to: lastIdx + 14 });
   let range = defRange();
-  try {
-    const sv = JSON.parse(localStorage.getItem(KEY) || 'null');
-    if (sv && isFinite(sv.f) && isFinite(sv.t) && sv.t - sv.f > 8 && sv.t - sv.f < 4000) range = { from: lastIdx + sv.f, to: lastIdx + sv.t };
-  } catch (e) {}
+  if (V.f == null) {
+    try {
+      const sv = JSON.parse(localStorage.getItem(KEY) || 'null');
+      if (sv && isFinite(sv.f) && isFinite(sv.t)) { V.f = sv.f; V.t = sv.t; V.pr = sv.pr || null; }
+    } catch (e) {}
+  }
+  if (V.f != null && isFinite(V.f) && isFinite(V.t) && V.t - V.f > 8 && V.t - V.f < 4000) range = { from: lastIdx + V.f, to: lastIdx + V.t };
   chart.timeScale().setVisibleLogicalRange(range);
+  const ps = chart.priceScale('right');
+  if (V.pr && isFinite(V.pr.a) && isFinite(V.pr.b) && V.pr.b > V.pr.a) {
+    try { ps.applyOptions({ autoScale: false }); ps.setVisibleRange({ from: V.pr.a, to: V.pr.b }); } catch (e) {}
+  }
+  // ширина шкали цін відома лише після першого малювання: повторюємо діапазон, щоб кількість свічок збіглася
+  const reapply = () => {
+    if (g !== gen) return;
+    try { chart.timeScale().setVisibleLogicalRange(range); if (V.pr) ps.setVisibleRange({ from: V.pr.a, to: V.pr.b }); } catch (e) {}
+  };
+  requestAnimationFrame(() => { reapply(); requestAnimationFrame(reapply); });
+  setTimeout(reapply, 150);
+  const saveView = () => { try { localStorage.setItem(KEY, JSON.stringify({ f: V.f, t: V.t, pr: V.pr || null })); } catch (e) {} };
   chart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
     if (!r) return;
-    try { localStorage.setItem(KEY, JSON.stringify({ f: r.from - lastIdx - extra, t: r.to - lastIdx - extra })); } catch (e) {}
+    V.f = r.from - lastIdx - extra; V.t = r.to - lastIdx - extra; saveView();
   });
+  // ручний масштаб по ціні: LW вимикає autoScale, коли тягнуть шкалу або колесо над нею
+  const prTimer = setInterval(() => {
+    try {
+      if (ps.options().autoScale === false) {
+        const r = ps.getVisibleRange();
+        if (r && (!V.pr || Math.abs(V.pr.a - r.from) > 1e-9 || Math.abs(V.pr.b - r.to) > 1e-9)) { V.pr = { a: r.from, b: r.to }; saveView(); }
+      } else if (V.pr) { V.pr = null; saveView(); }
+    } catch (e) {}
+  }, 400);
   document.getElementById('btn-fit').onclick = () => chart.timeScale().scrollToRealTime();
   document.getElementById('btn-reset').onclick = () => {
-    try { localStorage.removeItem(KEY); } catch (e) {}
+    V.f = V.t = null; V.pr = null; try { localStorage.removeItem(KEY); } catch (e) {}
     chart.timeScale().setVisibleLogicalRange(defRange());
     chart.priceScale('right').applyOptions({ autoScale: true });
   };
@@ -467,7 +494,7 @@
     tick(); cdTimer = setInterval(tick, 500);
   }
   try { window.ASHDRAW.attach({ chart, candles, P, el, T }); } catch (e) { console.warn('draw tools failed', e); }
-  cleanup = () => { if (cdTimer) clearInterval(cdTimer); try { chart.remove(); } catch (e) {} };
+  cleanup = () => { if (cdTimer) clearInterval(cdTimer); clearInterval(prTimer); try { chart.remove(); } catch (e) {} };
   }
 
   // ---- Запуск: або дані вшиті в сторінку, або сторінка стабільна і бере дані з сусіднього невидимого фрейму

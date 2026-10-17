@@ -657,10 +657,12 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
     def pn_news():
         st.markdown(ui.mq_header(f"{inst.key}1!", time_txt, lang, tr("r.news")), unsafe_allow_html=True)
         pool = N.select_news(news_f.value["items"], now_utc, hours=24, limit=80) if news_f.ok else []
-        items = N.for_asset(pool, inst.key)[:14]
+        items = N.localize(N.for_asset(pool, inst.key)[:14], lang)
         evs = [e for e in upcoming_show if e["impact"] == "High"]
+        if lang != "EN" and evs:
+            evs = [{**e, "title": x} for e, x in zip(evs, N.translate_titles([e["title"] for e in evs], lang))]
         if items or evs or not news_f.ok:
-            st.markdown(ui.news_card(items, evs, now_utc, errs, stale), unsafe_allow_html=True)
+            st.markdown(ui.news_card(items, evs, now_utc, errs, stale, lang), unsafe_allow_html=True)
         else:
             st.caption(tr("n.none"))
 
@@ -849,7 +851,7 @@ def terminal(inst_key: str, tf: str, scope: str, sess_mode: str, basis_override:
     else:
         rp = ss.get("rpanel")
         if rp in PANEL_FN:
-            c_chart, c_drawer, c_rail = st.columns([4.7, 1.6, 0.28], gap="small")
+            c_chart, c_drawer, c_rail = st.columns([4.1, 1.9, 0.28], gap="small")
         else:
             (c_chart, c_rail), c_drawer = st.columns([6.3, 0.28], gap="small"), None
         with c_chart:

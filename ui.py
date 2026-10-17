@@ -207,28 +207,29 @@ def flow_card(fl) -> str:
 
 
 # ---------------------------------------------------------------- новини
-def news_card(items: list[dict], events: list[dict], now_utc: datetime, errors: list[str], stale: str | None) -> str:
-    parts = ['<div class="panel"><div class="ph">Новини й календар<span class="src">'
-             + (esc(stale) if stale else "CNBC, MarketWatch, Yahoo, ФРС") + "</span></div>"]
+def news_card(items: list[dict], events: list[dict], now_utc: datetime, errors: list[str], stale: str | None, lang: str = "UA") -> str:
+    parts = [f'<div class="panel"><div class="ph">{esc(T("n.card", lang))}<span class="src">'
+             + (esc(stale) if stale else "CNBC, MarketWatch, Yahoo, FED") + "</span></div>"]
     if events:
         parts.append('<div style="margin-bottom:10px">')
         for ev in events[:5]:
             t = ev["ts"].astimezone(C.KYIV).strftime("%H:%M")
             mins = (ev["ts"] - now_utc).total_seconds() / 60
-            when = f"через {mins:.0f} хв" if 0 <= mins < 180 else ("щойно" if -30 <= mins < 0 else "")
+            when = T("n.in", lang).format(m=f"{mins:.0f}") if 0 <= mins < 180 else (T("n.now", lang) if -30 <= mins < 0 else "")
             col = "var(--call)" if ev["impact"] == "High" else "var(--pain)"
             parts.append(f'<div class="ev2"><span class="tm">{t}</span><span><span class="sdot" style="background:{col}"></span>'
                          f'{esc(ev["title"])}</span><span class="muted">{esc(when)}</span></div>')
         parts.append("</div>")
     parts.append('<div class="news">')
     if not items:
-        parts.append('<p class="muted">Новини недоступні: ' + esc("; ".join(errors) or "джерела не відповіли") + ".</p>")
+        parts.append('<p class="muted">' + esc(T("n.unavail", lang)) + ": " + esc("; ".join(errors) or "—") + ".</p>")
     for it in items:
         t = it["ts"].astimezone(C.KYIV).strftime("%H:%M")
         col = "#1fa392" if it["score"] > 0 else "#e5484d" if it["score"] < 0 else "#8793ad"
         tags = "".join(f'<span class="tag {"hi" if g in {"FED","CPI","JOBS","GEO","TARIFF"} else ""}">{g}</span>' for g in it["tags"][:3])
         link = esc(it["link"]) if it["link"].startswith("http") else "#"
-        parts.append(f'<div class="it"><span class="tm">{t}</span><div><a href="{link}" target="_blank" rel="noopener">'
+        orig = f' title="{esc(it["orig"])}"' if it.get("orig") and it["orig"] != it["title"] else ""
+        parts.append(f'<div class="it"><span class="tm">{t}</span><div><a href="{link}" target="_blank" rel="noopener"{orig}>'
                      f'<span class="sdot" style="background:{col}"></span>{esc(it["title"])}</a>'
                      f'<div class="meta">{tags}{esc(it["source"])}</div></div></div>')
     parts.append("</div></div>")
